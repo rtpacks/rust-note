@@ -7,7 +7,8 @@ fn main() {
     let regions = [southern_germany, chinese, english];
 
     for region in regions.iter() {
-        println!("{}", &region);
+        println!("{}", &region); // 默认会解引用，即不打印地址，而是打印值
+        println!("{:p}", &region); // 打印地址
     }
 
     let x = 3;
