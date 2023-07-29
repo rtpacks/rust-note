@@ -132,6 +132,12 @@ let b = (*a).clone(); // 宏如println!()不会获取该值的所有权
 let a = String::from("Hello world");
 a; // 使用值，Move发生丢失所有权，类似 let _tmp = a;
 let b = a; // error
+
+let mut a = &mut String::from("Hello");
+a.push_str(" World");
+a = &mut String::from("Hello");
+println!("{}", a); // error
+
 ```
 
 常见的错误写法是
