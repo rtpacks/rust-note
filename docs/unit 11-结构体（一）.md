@@ -49,6 +49,8 @@ let origin = Point(0, 0, 0);
 
 unit-like-struct，类单元结构体(unit-like struct)是没有任何字段的空 struct。
 
+详细信息可以查看：https://rustwiki.org/zh-CN/book/ch05-01-defining-structs.html#%E6%B2%A1%E6%9C%89%E4%BB%BB%E4%BD%95%E5%AD%97%E6%AE%B5%E7%9A%84%E7%B1%BB%E5%8D%95%E5%85%83%E7%BB%93%E6%9E%84%E4%BD%93
+
 ```rs
 struct St;
 ```
