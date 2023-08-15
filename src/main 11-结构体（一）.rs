@@ -32,6 +32,7 @@ fn main() {
      * ```
      * 
      * 结构体内存分布可以查看：https://course.rs/basic/compound-type/struct.html#%E7%BB%93%E6%9E%84%E4%BD%93%E7%9A%84%E5%86%85%E5%AD%98%E6%8E%92%E5%88%97
+     * 
      * 结构体所有权可以查看：https://course.rs/basic/compound-type/struct.html#%E7%BB%93%E6%9E%84%E4%BD%93%E6%95%B0%E6%8D%AE%E7%9A%84%E6%89%80%E6%9C%89%E6%9D%83
      *
      * ### 其他结构体
