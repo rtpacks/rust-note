@@ -111,5 +111,63 @@ fn main() {
      *   D,        // 256，超过255，编译报错
      * }
      * ```
+     *
+     * ## 为枚举添加方法
+     * 和Struct类型一样，也可以使用impl关键字为枚举类型定义方法。
+     * ```rs
+     *  #[derive(Clone, Copy)]
+     *   enum Gender {
+     *       Female, // 0
+     *       Male = 1,
+     *   }
+     *
+     *   impl Gender {
+     *       fn is_male(&self) -> bool {
+     *           (*self as u8) == 1
+     *       }
+     *   }
+     *
+     *   let g = Gender::Female;
+     *   println!("{}", g.is_male());
+     * ```
      */
+
+    #[derive(Copy, Clone)]
+    enum Week {
+        Monday = 1,
+        Tuesday,
+        Wednesday,
+        Thursday,
+        Friday,
+        Saturday,
+        Sunday,
+    }
+
+    impl Week {
+        fn is_weekend(&self) -> bool {
+            if (*self as u8) > 5 {
+                return true;
+            }
+            false
+        }
+    }
+
+    let day = Week::Saturday;
+    println!("{}", day.is_weekend());
+
+    #[derive(Clone, Copy)]
+    enum Gender {
+        Female, // 0
+        Male = 1,
+    }
+
+    impl Gender {
+        fn is_male(&self) -> bool {
+            (*self as u8) == 1
+        }
+    }
+
+    let g = Gender::Female;
+
+    println!("{}", g.is_male());
 }

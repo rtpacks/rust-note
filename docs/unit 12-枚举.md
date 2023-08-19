@@ -122,3 +122,24 @@ fn main(){
   D,        // 256，超过255，编译报错
 }
 ```
+
+## 为枚举添加方法
+
+和 Struct 类型一样，也可以使用 impl 关键字为枚举类型定义方法。
+
+```rs
+ #[derive(Clone, Copy)]
+  enum Gender {
+      Female, // 0
+      Male = 1,
+  }
+
+  impl Gender {
+      fn is_male(&self) -> bool {
+          (*self as u8) == 1
+      }
+  }
+
+  let g = Gender::Female;
+  println!("{}", g.is_male());
+```
