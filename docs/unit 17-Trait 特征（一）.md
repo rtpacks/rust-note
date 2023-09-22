@@ -26,6 +26,7 @@ Trait /treɪt/ 定义了一组可以被共享的行为，只要实现了特征�
 fn main {
       trait Playable {
         fn play(&self);
+        // 可以实现默认方法
         fn pause(&self) {
             println!("pause");
         }

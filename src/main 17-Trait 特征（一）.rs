@@ -24,6 +24,7 @@ fn main() {
 
     trait Playable {
         fn play(&self);
+        // 可以实现默认方法
         fn pause(&self) {
             println!("pause");
         }
