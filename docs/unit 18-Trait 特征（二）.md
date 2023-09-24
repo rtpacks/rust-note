@@ -103,3 +103,96 @@ Rsut 采用就近原则来确定方法来自哪个 Trait：
 ### 总结
 
 Rust 是一门支持组合的语言：通过实现 Trait 而具备相应的功能，是组合而非继承。
+
+### code
+
+```rs
+fn main {
+      trait Playable {
+        fn play(&self);
+        // 可以实现默认方法
+        fn pause(&self) {
+            println!("pause");
+        }
+        fn get_duration(&self) -> f32;
+    }
+
+    struct Audio {
+        name: String,
+        duration: f32,
+    }
+
+    // 为 Audio 实现/组合 Playable Trait
+    impl Playable for Audio {
+        fn play(&self) {
+            println!("playing");
+        }
+        fn get_duration(&self) -> f32 {
+            self.duration
+        }
+    }
+
+    struct Video {
+        name: String,
+        duration: f32,
+    }
+
+    impl Playable for Video {
+        fn play(&self) {
+            println!("watching video: {}", self.name);
+        }
+        fn pause(&self) {
+            println!("video paused");
+        }
+        fn get_duration(&self) -> f32 {
+            self.duration
+        }
+    }
+
+    // 组合是灵活且易读的，当继承链非常长时，难以判断属性是继承于谁
+    println!(
+        "{}",
+        Audio {
+            name: String::from("Hello"),
+            duration: 12.0
+        }
+        .get_duration()
+    );
+
+    // 对于对象没有实现的方法，对象会从实现的trait中寻找该方法
+    Audio {
+        name: String::from("Hello"),
+        duration: 12.0,
+    }
+    .pause();
+
+    // 实现Copy Clone
+    #[allow(unused)]
+    struct Person {
+        age: u8,
+    }
+    let p = &Person { age: 12 };
+    p.clone();
+
+    #[allow(unused)]
+    #[derive(Clone, Copy)]
+    enum Direction {
+        Up,
+        Down,
+        Left,
+        Right,
+    }
+
+    let mut buf: Vec<u8> = vec![];
+
+    trait W {
+        fn write_all(&self) {
+            println!("write all")
+        }
+    }
+
+    impl W for Vec<u8> {}
+
+    buf.write_all();
+}
+```
