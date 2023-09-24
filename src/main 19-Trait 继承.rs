@@ -5,7 +5,7 @@ fn main() {
     /*
      * ## Trait继承
      *
-     * 让类型去实现Trait，使类型具备该Trait的功能，使组合（composite）的方式。
+     * 让类型去实现Trait，使类型具备该Trait的功能，是组合（composite）的方式。
      *
      * 经常和组合放在一起讨论的是继承(inheritance)。
      * 继承通常用来描述属于同种性质的**父子关系(is a)**，而组合用来描述**具有某功能(has a)**。
@@ -15,7 +15,8 @@ fn main() {
      *
      * 通过新编程语言的特性可以发现，类型功能的增加，组合方式（composite）是优于继承（inheritance）的。
      *
-     * Rust除了支持组合，还支持继承。但**Rust只支持Trait之间的继承**，比如Trait A继承Trait B，类型没有继承的概念。
+     * Rust除了支持组合，还支持继承。
+     * 但**Rust只支持Trait之间的继承**，比如Trait A继承Trait B，类型没有继承的概念。
      * 实现继承的方式很简单，在定义Trait A时使用冒号加上Trait B即可。
      * 如果Trait A继承Trait B，当类型C想要实现Trait A时，将要求同时也要去实现B。
      *
