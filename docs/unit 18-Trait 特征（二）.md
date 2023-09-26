@@ -98,7 +98,14 @@ enum Direction {
 Rsut 采用就近原则来确定方法来自哪个 Trait：
 首先在当前作用域的 Trait 定义查找，如果没有找到，则在导入的 Trait 中查找。如果仍未找到，则报错。
 因此，在使用 Trait 方法时，当前作用域必须存在类型已经实现，并且包含该方法的 Trait。
-此外，Rust 还规定了不能为外部类型实现外部 trait 的规则。
+
+简述：Rust 通过类型调用来自 Trait 的方法，需要明确这个方法具体来自哪个 Trait，所以就只有三种情况：
+
+- 导入 Trait，为定义在当前作用域的 Strcut C 使用 `implement A for C {}`
+- 导入类型，为定义在当前作用域的 Trait A 使用 `implement A for C {}`
+- 导入 Trait 和类型，使用 `implement A for C{}`
+
+为了避免随意修改第三方代码，Rust 规定了不能为外部类型实现外部 trait 的规则，也就是第三种情况不生效。
 
 ### 总结
 

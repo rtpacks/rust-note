@@ -97,7 +97,13 @@ fn main() {
      * Rsut 采用就近原则来确定方法来自哪个 Trait：
      * 首先在当前作用域的Trait定义查找，如果没有找到，则在导入的 Trait 中查找。
      * 因此，在使用 Trait 方法时，当前作用域必须存在类型已经实现，并且包含该方法的 Trait。
-     * 此外，Rust还规定了不能为外部类型实现外部 trait 的规则。
+     *
+     * 简述：Rust通过类型调用来自Trait的方法，需要明确这个方法具体来自哪个Trait，所以就只有三种情况：
+     * - 导入Trait，为定义在当前作用域的Strcut C使用 `implement A for C {}`
+     * - 导入类型，为定义在当前作用域的Trait A使用 `implement A for C {}`
+     * - 导入Trait和类型，使用 `implement A for C{}`
+     *
+     * 为了避免随意修改第三方代码，Rust规定了不能为外部类型实现外部 trait 的规则，也就是第三种情况不生效。
      *
      * ### 总结
      * Rust是一门支持组合的语言：通过实现Trait而具备相应的功能，是组合而非继承。
