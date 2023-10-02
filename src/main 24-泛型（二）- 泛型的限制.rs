@@ -48,6 +48,13 @@ fn main() {
      * 因此，在 `double` 函数的声明是：
      * T: std::ops::Add表示泛型T只能代表那些实现了std::ops::Add Trait的数据类型，比如各种数值类型都实现了Add Trait，因此T可以代表数值类型，而Vec类型没有实现Add Trait，因此T不能代表Vec类型。
      *
+     * 观察指定变量数据类型的写法i: i32和限制泛型的写法T: Trait_Name，由此可知，Trait其实是泛型的数据类型，Trait限制了泛型所能代表的类型，正如数据类型限制了变量所能存放的数据格式。
+     * 有时候需要对泛型做多重限制，这时使用+即可。例如T: Add<Output=T>+Copy+Clone，表示限制泛型T只能代表那些同时实现了Add、Copy、Clone这三种Trait的数据类型。
+     *
+     * 之所以要做多重限制，是因为有时候限制少了，泛型所能代表的类型不够精确或者缺失某种功能。比如，只限制泛型T是实现了std::ops::Add Trait的类型还不够，还要限制它实现了Copy Trait以便函数体内的参数i被转移所有权时会自动进行Copy，但Copy Trait是Clone Trait的子Trait，即Copy依赖于Clone，因此限制泛型T实现Copy的同时，还要限制泛型T同时实现Clone Trait。
+     *
+     * 简而言之，要对泛型做限制，一方面是函数体内需要某种Trait提供的功能(比如函数体内要对i执行加法操作，需要的是std::ops::Add的功能)，另一方面是要让泛型T所能代表的数据类型足够精确化(如果不做任何限制，泛型将能代表任意数据类型)。
+     *
      */
 
     trait Moveable {
