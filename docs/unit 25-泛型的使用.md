@@ -121,3 +121,59 @@ display_arr(&arr);
 let arr: [char, 4] = ['1', '2', '3', '4'];
 display_arr(&arr);
 ```
+
+### const 泛型（Rust 1.51 版本引入的重要特性），字面量类型
+
+通过引用可以很轻松的解决处理任何类型数组的问题，但是如果在某些场景下引用不适宜用或者干脆不能用呢？
+比如限制类型的某一个属性在某个范围或固定值：
+
+- 任何数组 到 `限制长度小于4的任何类型数组`，长度的值小于 4，此时数组的引用不适用这种情况
+- 任何年龄的 Person 到 `age 大于等于 18 的 Person`，age 的值大于等于 18，此时 Person 的引用不能表达这种情况。
+
+```rs
+fn display_arr<T: std::fmt::Debug>(arr: &[T]) {
+    println!("{:#?}", arr);
+}
+let a: [i32, 2] = [1, 2];
+let b: [i32, 3] = [1, 2, 3];
+struct Person {
+     age: i32
+}
+fn display_p<T: std::fmt::Debug>(p: &Person) {
+     println!("{:#?}", p);
+}
+let p = Person { age: 17 };
+```
+
+当某些场景下引用不适宜用或者干脆不能用，这就需要 const 泛型，也就是**针对值的泛型**（用常量值而不是类型作为泛型的参数，即字面量类型），正好可以处理类似问题，它相当于增加了限制（缩小了泛型的范围），可以作为值直接使用。
+
+```rs
+fn display_arr<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+    println!("{:?}", arr);
+}
+let arr: [i32; 3] = [1, 2, 3];
+display_arr(arr);
+let arr: [i32; 2] = [1, 2];
+display_arr(arr);
+```
+
+在调用 `display_arr` 时，可传入 `N` 的**实参**为
+
+- 一个单独的 const 泛型参数，如 `M`，这种方式通常是由 `祖` 级传入限制
+- 一个字面量 (i.e. 整数，布尔值或字符)，如 `2` 表示固定值
+- 一个具体的 const 表达式（双大括号）， 并且表达式中泛型参数不参与任何计算，如 `{ 1 + 1 }` 表示动态计算
+
+```rs
+display_arr::<i32, M>(); // ok: 符合第一种，但注意需要传递M泛型。
+display_arr::<i32, 2021>(); // ok: 符合第二种
+display_arr::<i32, {20 * 100 + 20 * 10 + 1}>(); // ok: 符合第三种
+display_arr::<i32, { M + 1 }>(); // error: 违背第三种，表达式中泛型参数不参与任何计算
+display_arr::<i32, { std::mem::size_of::<T>() }>(); // error: 违背第三种，表达式中泛型参数不参与任何计算
+```
+
+除函数可以使用 const 泛型参数外，变量类型也可以使用 const 泛型参数。
+更多 const 的使用，可以查看：
+
+- https://rustcc.cn/article?id=d1d98ea9-8460-416d-9280-e22dc8d47b6b
+- https://learnku.com/docs/practice/const-fan-xing/13837
+- https://course.rs/basic/trait/generic.html#const-%E6%B3%9B%E5%9E%8Brust-151-%E7%89%88%E6%9C%AC%E5%BC%95%E5%85%A5%E7%9A%84%E9%87%8D%E8%A6%81%E7%89%B9%E6%80%A7
