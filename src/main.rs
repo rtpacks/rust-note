@@ -107,9 +107,9 @@ fn main() {
      * ```
      *
      * ### 泛型的引用类型
-     * 泛型的引用类型常出现在实现相同Trait但不同类型的数据类型上，如字符数组、整数数组，更具体还有i32数组，i64数组等。
+     * 泛型的引用类型常出现在实现相同Trait但不同类型的数据类型上，如字符数组、i32数组、i64数组等。
      *
-     * 如果参数是一个引用，且又使用泛型，则需要使用泛型的引用 `&T或&mut T`，&T是不可变泛型引用，&mut T是可变泛型引用。
+     * 如果参数是一个引用，且需要泛型，就可以使用泛型的引用 `&T或&mut T`，&T是不可变泛型引用，&mut T是可变泛型引用。
      *
      * 如打印不同类型的数组，实现也不难，唯一要注意的是需要对 T 加一个限制 std::fmt::Debug，该限制表明 T 可以用在 println!("{:?}", arr) 中，因为 {:?} 形式的格式化输出需要 arr 实现该特征。
      * ```rs
@@ -124,19 +124,74 @@ fn main() {
      * display_arr(&arr);
      * ```
      *
+     * ### const 泛型（Rust 1.51 版本引入的重要特性），字面量类型
+     *
+     * 通过引用可以很轻松的解决处理任何类型数组的问题，但是如果在某些场景下引用不适宜用或者干脆不能用呢？
+     * 比如限制类型的某一个属性在某个范围或固定值：
+     * - 任何数组 到 `限制长度小于4的任何类型数组`，长度的值小于 4，此时数组的引用不适用这种情况
+     * - 任何年龄的Person 到 `age 大于等于 18 的 Person`，age 的值大于等于 18，此时Person的引用不能表达这种情况。
+     *
+     * ```rs
+     * fn display_arr<T: std::fmt::Debug>(arr: &[T]) {
+     *     println!("{:#?}", arr);
+     * }
+     * let a: [i32, 2] = [1, 2];
+     * let b: [i32, 3] = [1, 2, 3];
+     *
+     *
+     * struct Person {
+     *      age: i32
+     * }
+     * fn display_p<T: std::fmt::Debug>(p: &Person) {
+     *      println!("{:#?}", p);
+     * }
+     * let p = Person { age: 17 };
+     * ```
+     *
+     * 当某些场景下引用不适宜用或者干脆不能用，这就需要 const 泛型，也就是**针对值的泛型**（用常量值而不是类型作为泛型的参数，即字面量类型），正好可以处理类似问题，它相当于增加了限制（缩小了泛型的范围），可以作为值直接使用。
+     *
+     * ```rs
+     * fn display_arr<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+     *     println!("{:?}", arr);
+     * }
+     * let arr: [i32; 3] = [1, 2, 3];
+     * display_arr(arr);
+     *
+     * let arr: [i32; 2] = [1, 2];
+     * display_arr(arr);
+     * ```
+     *
+     * 在调用 `display_arr` 时，可传入 `N` 的**实参**为
+     * - 一个单独的 const 泛型参数，如 `M`，这种方式通常是由 `祖` 级传入限制
+     * - 一个字面量 (i.e. 整数，布尔值或字符)，如 `2` 表示固定值
+     * - 一个具体的 const 表达式（双大括号）， 并且表达式中泛型参数不参与任何计算，如 `{ 1 + 1 }` 表示动态计算
+     *
+     * ```rs
+     * display_arr::<i32, M>(); // ok: 符合第一种，但注意需要传递M泛型。
+     * display_arr::<i32, 2021>(); // ok: 符合第二种
+     * display_arr::<i32, {20 * 100 + 20 * 10 + 1}>(); // ok: 符合第三种
+     *
+     * display_arr::<i32, { M + 1 }>(); // error: 违背第三种，表达式中泛型参数不参与任何计算
+     * display_arr::<i32, { std::mem::size_of::<T>() }>(); // error: 违背第三种，表达式中泛型参数不参与任何计算
+     * ```
+     *
+     * 除函数可以使用const泛型参数外，变量类型也可以使用const泛型参数。
+     *
+     * 更多const的使用，可以查看：
+     * - https://rustcc.cn/article?id=d1d98ea9-8460-416d-9280-e22dc8d47b6b
+     * - https://learnku.com/docs/practice/const-fan-xing/13837
+     * - https://course.rs/basic/trait/generic.html#const-%E6%B3%9B%E5%9E%8Brust-151-%E7%89%88%E6%9C%AC%E5%BC%95%E5%85%A5%E7%9A%84%E9%87%8D%E8%A6%81%E7%89%B9%E6%80%A7
      */
 
     struct Point<T> {
         x: T,
         y: T,
     }
-
     impl<T> Point<T> {
         fn x(&self) -> &T {
             &self.x
         }
     }
-
     impl Point<f64> {
         fn f64(&self) -> &f64 {
             &self.x
@@ -144,19 +199,32 @@ fn main() {
     }
 
     let p = Point { x: 32, y: 32 };
-
     println!("{}, {}", p.x, p.x());
-
     let p = Point { x: 12.0, y: 12.0 };
     println!("{:?}, {:?}, {:?}", p.x, p.x(), p.f64());
-
-    fn display_arr<T: std::fmt::Debug>(arr: &[T]) {
+    fn display_arr1<T: std::fmt::Debug>(arr: &[T]) {
         println!("{:#?}", arr);
     }
-
     let arr = [1, 2, 3, 4];
-    display_arr(&arr);
-
+    display_arr1(&arr);
     let arr = ['1', '2', '3', '4'];
-    display_arr(&arr);
+    display_arr1(&arr);
+
+    // const 泛型参数
+    fn display_arr2<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+        println!("{:#?}", N + 1);
+    }
+    fn display_arr3<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+
+        let _arr = [1, 2, 3, 4];
+
+        // display_arr2::<T, N>(_arr);
+    }
+    let arr: [i32; 3] = [1, 2, 3];
+    display_arr2::<i32, { 1 + 2 }>(arr);
+    let arr: [i32; 2] = [1, 2];
+    const k: usize = 2;
+    display_arr3::<i32, { k }>(arr);
 }
