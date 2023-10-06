@@ -232,3 +232,64 @@ println!("{}", double_me(3i8));
 struct Food<T: Debug>(T);
 impl<T: Debug> Eatable for Food<T> {}
 ```
+
+### code
+
+```rs
+fn main {
+    struct Point<T> {
+        x: T,
+        y: T,
+    }
+    impl<T> Point<T> {
+        fn x(&self) -> &T {
+            &self.x
+        }
+    }
+    impl Point<f64> {
+        fn f64(&self) -> &f64 {
+            &self.x
+        }
+    }
+
+    let p = Point { x: 32, y: 32 };
+    println!("{}, {}", p.x, p.x());
+    let p = Point { x: 12.0, y: 12.0 };
+    println!("{:?}, {:?}, {:?}", p.x, p.x(), p.f64());
+    fn display_arr1<T: std::fmt::Debug>(arr: &[T]) {
+        println!("{:#?}", arr);
+    }
+    let arr = [1, 2, 3, 4];
+    display_arr1(&arr);
+    let arr = ['1', '2', '3', '4'];
+    display_arr1(&arr);
+
+    // const 泛型参数
+    fn display_arr2<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+        println!("{:#?}", N + 1);
+    }
+    fn display_arr3<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+
+        let _arr = [1, 2, 3, 4];
+
+        // display_arr2::<T, N>(_arr);
+    }
+    let arr: [i32; 3] = [1, 2, 3];
+    display_arr2::<i32, { 1 + 2 }>(arr);
+    let arr: [i32; 2] = [1, 2];
+    const k: usize = 2;
+    display_arr3::<i32, { k }>(arr);
+
+    fn double_me<T>(i: T) -> T
+    where
+        T: Add<Output = T> + Clone + Copy,
+    {
+        i + i
+    }
+    println!("{}", double_me(3u32));
+    println!("{}", double_me(3u8));
+    println!("{}", double_me(3i8));
+}
+```
