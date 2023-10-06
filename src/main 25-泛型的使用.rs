@@ -1,9 +1,10 @@
 use std::fmt::Debug;
+use std::ops::Add;
 
 fn main() {
     /*
      * ## 泛型的使用
-     * 泛型的存在让抽象程度更高，因此在rust中泛型用处很多，如结构体、枚举、方法中都可以使用泛型。
+     * 泛型的存在让抽象程度更高，因此在rust中泛型用处很多，不仅仅是函数的参数可以指定泛型，任何需要指定数据类型的地方，都可以使用泛型来替代具体的数据类型，以此来表示此处可以使用比某种具体类型更为通用的数据类型。
      *
      * 注意：**使用的泛型都需要提前声明。**
      *
@@ -22,7 +23,7 @@ fn main() {
      * }
      * ```
      *
-     * ### 枚举中使用泛型
+     * ### 枚举Enum中使用泛型
      *
      * 提到枚举类型，Option 永远是第一个应该被想起来的，Option<T> 是一个拥有泛型 T 的枚举类型，它第一个成员是 Some(T)，存放了一个类型为 T 的值。
      * 得益于泛型的引入，我们可以在任何一个需要返回值的函数中，使用 Option<T> 枚举类型来做为返回值，用于返回一个任意类型的值 Some(T)，或者没有值 None。
@@ -107,9 +108,9 @@ fn main() {
      * ```
      *
      * ### 泛型的引用类型
-     * 泛型的引用类型常出现在实现相同Trait但不同类型的数据类型上，如字符数组、整数数组，更具体还有i32数组，i64数组等。
+     * 泛型的引用类型常出现在实现相同Trait但不同类型的数据类型上，如字符数组、i32数组、i64数组等。
      *
-     * 如果参数是一个引用，且又使用泛型，则需要使用泛型的引用 `&T或&mut T`，&T是不可变泛型引用，&mut T是可变泛型引用。
+     * 如果参数是一个引用，且需要泛型，就可以使用泛型的引用 `&T或&mut T`，&T是不可变泛型引用，&mut T是可变泛型引用。
      *
      * 如打印不同类型的数组，实现也不难，唯一要注意的是需要对 T 加一个限制 std::fmt::Debug，该限制表明 T 可以用在 println!("{:?}", arr) 中，因为 {:?} 形式的格式化输出需要 arr 实现该特征。
      * ```rs
@@ -127,6 +128,7 @@ fn main() {
      * ### const 泛型（Rust 1.51 版本引入的重要特性），字面量类型
      *
      * 通过引用可以很轻松的解决处理任何类型数组的问题，但是如果在某些场景下引用不适宜用或者干脆不能用呢？
+     *
      * 比如限制类型的某一个属性在某个范围或固定值：
      * - 任何数组 到 `限制长度小于4的任何类型数组`，长度的值小于 4，此时数组的引用不适用这种情况
      * - 任何年龄的Person 到 `age 大于等于 18 的 Person`，age 的值大于等于 18，此时Person的引用不能表达这种情况。
@@ -182,19 +184,46 @@ fn main() {
      * - https://learnku.com/docs/practice/const-fan-xing/13837
      * - https://course.rs/basic/trait/generic.html#const-%E6%B3%9B%E5%9E%8Brust-151-%E7%89%88%E6%9C%AC%E5%BC%95%E5%85%A5%E7%9A%84%E9%87%8D%E8%A6%81%E7%89%B9%E6%80%A7
      *
+     * ### 泛型的性能
+     * 在 Rust 中泛型是零成本的抽象，意味着你在使用泛型时，完全不用担心性能上的问题。
+     *
+     * 但任何选择都是权衡得失的，既然我们获得了性能上的巨大优势，那么又失去了什么呢？
+     * Rust 是在编译期为泛型对应的多个类型，生成各自的代码，因此损失了**编译速度**和**增大了最终生成文件的大小**。
+     *
+     * 具体来说：
+     * Rust 通过在编译时进行泛型代码的 单态化(monomorphization) 来保证效率。
+     * 单态化是一个通过填充编译时使用的具体类型，将通用代码转换为特定代码的过程。
+     * 当代码运行，它的执行效率就跟好像手写每个具体定义的重复代码一样。这个单态化过程正是 Rust 泛型在运行时极其高效的原因。
+     *
+     * 编译器所做的工作正好与我们创建泛型函数的步骤相反，编译器寻找所有泛型代码被调用的位置并针对具体类型生成不同参数类型，但逻辑相同的代码。
+     * 因为编译器会对泛型类型进行替换，所以会导致泛型代码膨胀 (code bloat)，从一个函数膨胀为零个、一个或多个具体数据类型的函数。
+     * 这种膨胀会导致编译后的程序文件变大很多。不过，多数情况下，代码膨胀的问题都不是大问题。
+     *
+     * ```rs
+     * fn double_me<T>(i: T) -> T
+     *   where T: Add<Output=T> + Clone + Copy {
+     *   i + i
+     * }
+     *
+     * println!("{}", double_me(3u32));
+     * println!("{}", double_me(3u8));
+     * println!("{}", double_me(3i8));
+     * ```
+     *
+     * 在编译期间，rustc 会根据调用 double_me() 时传递的具体数据类型进行替换。
+     * 上面示例使用了u32、u8和i8三种类型的值传递给泛型参数，那么编译期间，编译器会对应生成三个double_me()函数，它们的参数类型分别是u32、u8和i8。
+     *
      */
 
     struct Point<T> {
         x: T,
         y: T,
     }
-
     impl<T> Point<T> {
         fn x(&self) -> &T {
             &self.x
         }
     }
-
     impl Point<f64> {
         fn f64(&self) -> &f64 {
             &self.x
@@ -202,19 +231,43 @@ fn main() {
     }
 
     let p = Point { x: 32, y: 32 };
-
     println!("{}, {}", p.x, p.x());
-
     let p = Point { x: 12.0, y: 12.0 };
     println!("{:?}, {:?}, {:?}", p.x, p.x(), p.f64());
-
-    fn display_arr<T: std::fmt::Debug>(arr: &[T]) {
+    fn display_arr1<T: std::fmt::Debug>(arr: &[T]) {
         println!("{:#?}", arr);
     }
-
     let arr = [1, 2, 3, 4];
-    display_arr(&arr);
-
+    display_arr1(&arr);
     let arr = ['1', '2', '3', '4'];
-    display_arr(&arr);
+    display_arr1(&arr);
+
+    // const 泛型参数
+    fn display_arr2<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+        println!("{:#?}", N + 1);
+    }
+    fn display_arr3<T: std::fmt::Debug, const N: usize>(arr: [T; N]) {
+        println!("{:#?}", arr);
+
+        let _arr = [1, 2, 3, 4];
+
+        // display_arr2::<T, N>(_arr);
+    }
+    let arr: [i32; 3] = [1, 2, 3];
+    display_arr2::<i32, { 1 + 2 }>(arr);
+    let arr: [i32; 2] = [1, 2];
+    const k: usize = 2;
+    display_arr3::<i32, { k }>(arr);
+
+    fn double_me<T>(i: T) -> T
+    where
+        T: Add<Output = T> + Clone + Copy,
+    {
+        i + i
+    }
+
+    println!("{}", double_me(3u32));
+    println!("{}", double_me(3u8));
+    println!("{}", double_me(3i8));
 }
