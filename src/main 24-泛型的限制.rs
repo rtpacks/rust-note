@@ -13,7 +13,7 @@ fn main() {
      * 事实上，在double的函数体内对泛型T的值i进行加法操作，只有实现了 Trait `std::ops::Add` 的类型才能使用+进行加法操作。
      * 因此要限制泛型T是那些实现了std::ops::Add的数据类型。
      *
-     * **限制泛型**也叫做Trait绑定(**Trait Bound**)，其语法有两种：
+     * **限制泛型**也叫做 Trait 绑定，Trait 约束(**Trait Bound**)，其语法有两种：
      * - 在定义泛型类型T时，使用类似于T: Trait_Name这种语法进行限制
      * - 在返回值后面、大括号前面使用where关键字，如where T: Trait_Name
      * `T: trait_name` 这种形式中，`:` 不代表特征 Trait 的继承，而是表示对数据类型的限制，即T: Trait_Name表示将泛型T限制为那些实现了Trait_Name Trait的数据类型。
