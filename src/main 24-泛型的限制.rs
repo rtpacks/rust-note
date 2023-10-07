@@ -69,9 +69,14 @@ fn main() {
      * 另一方面，即使定义struct Food<T: Debug>，在impl Food<T>时，也仍然要在impl时指定泛型的限制，否则将编译错误。
      * 也就是说，如果某个泛型类型有对应的impl，那么**在定义类型时指定的泛型限制很可能是多余的**。
      * 但如果没有对应的impl，那么可能有必要在定义泛型类型时加上泛型限制。
+     *
      * ```rs
      * #[derive(Debug)]
-     * struct Food<T: Debug>(T);
+     * struct Food<T: Debug>(T); // 应当尽量不在定义类型时限制泛型的范围，除非确实有必要去限制，否则很可能是冗余的。
+     * impl<T: Debug> Eatable for Food<T> {}
+     *
+     * #[derive(Debug)]
+     * struct Food<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
      * impl<T: Debug> Eatable for Food<T> {}
      * ```
      */
