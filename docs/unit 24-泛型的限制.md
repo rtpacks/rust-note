@@ -72,7 +72,11 @@ T: std::ops::Add 表示泛型 T 只能代表那些实现了 std::ops::Add Trait 
 
 ```rs
 #[derive(Debug)]
-struct Food<T: Debug>(T);
+struct Food<T: Debug>(T); // 应当尽量不在定义类型时限制泛型的范围，除非确实有必要去限制，否则很可能是冗余的。
+impl<T: Debug> Eatable for Food<T> {}
+
+#[derive(Debug)]
+struct Food<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
 impl<T: Debug> Eatable for Food<T> {}
 ```
 
