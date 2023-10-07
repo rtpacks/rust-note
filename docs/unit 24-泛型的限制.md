@@ -10,7 +10,7 @@ fn double<T>(i: T) -> T {}
 事实上，在 double 的函数体内对泛型 T 的值 i 进行加法操作，只有实现了 Trait `std::ops::Add` 的类型才能使用+进行加法操作。
 因此要限制泛型 T 是那些实现了 std::ops::Add 的数据类型。
 
-**限制泛型**也叫做 Trait 绑定(**Trait Bound**)，其语法有两种：
+**限制泛型**也叫做 Trait 绑定，Trait 约束(**Trait Bound**)，其语法有两种：
 
 - 在定义泛型类型 T 时，使用类似于 T: Trait_Name 这种语法进行限制
 - 在返回值后面、大括号前面使用 where 关键字，如 where T: Trait_Name
