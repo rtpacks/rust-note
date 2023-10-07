@@ -77,8 +77,90 @@ sharps[0].get_area();
 - 前者可以使用 Trait Object 实现 Trait 获得 get_area 方法
 - 后者使用泛型，在实现 Trait 的基础上，还需抽象一层以便使用 i32/i64/f32/f64
 
+### 进一步深入 Trait 和泛型
+
+Trait 特征与泛型的进阶知识：https://course.rs/basic/trait/advance-trait.html#%E6%B7%B1%E5%85%A5%E4%BA%86%E8%A7%A3%E7%89%B9%E5%BE%81
+
+#### 关联类型
+
+关联类型是在特征定义的语句块中，**申明一个自定义类型**，这样就可以在特征的方法签名中使用该类型。
+以下是标准库中的迭代器特征 Iterator，它有一个 Item 关联类型，用于替代遍历的值的类型。
+同时，next 方法也返回了一个 Item 类型，不过使用 Option 枚举进行了包裹，假如迭代器中的值是 i32 类型，那么调用 next 方法就将获取一个 Option<i32> 的值。
+
+关联类型写法
+
+```rs
+pub trait Iterator {
+  type Item;
+  fn next(&mut self) -> Option<Self::Item>;
+}
+```
+
+以上可以改造成泛型写法
+
+```rs
+pub trait Iterator<Item> {
+    fn next(&mut self) -> Option<Item>;
+}
+```
+
+代码块 1：当类型定义很复杂时，使用关联类型（别名）可以极大的增加可读性
+
+```rs
+pub trait CacheableItem: Clone + Default + fmt::Debug + Decodable + Encodable {
+  type Address: AsRef<[u8]> + Clone + fmt::Debug + Eq + Hash;
+  fn get_address(&self) -> Address; // 当类型定义很复杂时，使用关联类型可以极大的增加可读性
+}
+```
+
+代码块 2：使用关联类型，外部（函数）无需声明 trait 所需的泛型
+
+```rs
+trait Container<A, B> {
+    fn contains(&self, a: A, b: B) -> bool;
+}
+fn diff<A, B, C>(container: &C) -> i32 // 由于trait需要泛型，导致函数也需要声明泛型trait需要的泛型
+  where
+    C : Container<A, B> {...}
+
+
+trait Container{
+    type A;
+    type B;
+    fn contains(&self, a: &Self::A, b: &Self::B) -> bool;
+}
+fn diff<C: Container>(container: &C) {} // 使用关联类型，函数无需声明trait的泛型
+```
+
+关联类型的优势是**自定义类型的定义（类型别名）**，用一个自定义类型简化复杂的类型的编写，对比代码可以发现：
+
+- 当类型定义复杂时（`AsRef<[u8]> + Clone + fmt::Debug + Eq + Hash`），关联类型写法可以极大的增加可读性。
+- 使用泛型后，在使用的地方要标记类型 `Iterator<Item>`，而关联类型只需要写 `Iterator`，这在 impl 类型时由于 trait 需要泛型，导致函数也需要声明泛型 trait 需要的泛型，代码较为难读。
+
+在泛型的限制中提到过：应当尽量不在定义类型时限制泛型的范围，除非确实有必要去限制，否则只在 impl 类型时去限制泛型，并且遵守缺失什么功能就添加什么限制的规范，这就是为了避免冗余。
+
+```rs
+#[derive(Debug)]
+struct Food<T: Debug>(T); // 应当尽量不在定义类型时限制泛型的范围，除非确实有必要去限制，否则很可能是冗余的。
+impl<T: Debug> Eatable for Food<T> {}
+
+#[derive(Debug)]
+struct Food<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
+impl<T: Debug> Eatable for Food<T> {}
+```
+
 ### code
 
 ```rs
+fn main {
+  trait Eatable {}
 
+  #[derive(Debug)]
+  struct Food1<T: Debug>(T); // 应当尽量不在定义类型时限制泛型的范围，除非确实有必要去限制，否则很可能是冗余的。
+  impl<T: Debug> Eatable for Food1<T> {}
+
+  #[derive(Debug)]
+  struct Food2<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
+  impl<T: Debug> Eatable for Food2<T> {}
+}
 ```
