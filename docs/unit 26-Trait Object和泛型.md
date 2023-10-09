@@ -145,7 +145,7 @@ struct Food<T: Debug>(T); // 应当尽量不在定义类型时限制泛型的范
 impl<T: Debug> Eatable for Food<T> {}
 
 #[derive(Debug)]
-struct Food<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
+struct Food<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么，也就是为类型实现功能即impl时限制类型能做什么
 impl<T: Debug> Eatable for Food<T> {}
 ```
 
@@ -160,7 +160,7 @@ fn main {
   impl<T: Debug> Eatable for Food1<T> {}
 
   #[derive(Debug)]
-  struct Food2<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么
+  struct Food2<T>(T); // 尽量不去限制类型是什么，而是限制类型能做什么，也就是为类型实现功能即impl时限制类型能做什么
   impl<T: Debug> Eatable for Food2<T> {}
 }
 ```
