@@ -276,3 +276,99 @@ println!("{}", res);
 - https://www.zhihu.com/question/435470652
 - https://rustwiki.org/zh-CN/book/ch10-03-lifetime-syntax.html#%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F
 - https://course.rs/basic/lifetime.html#%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E6%A0%87%E6%B3%A8%E8%AF%AD%E6%B3%95
+
+
+### code
+```rs
+fn main {
+    // 悬垂引用示例
+    let mut x = &0;
+    {
+        let y = 1;
+        x = &y;
+        println!("{x}");
+    }
+    // println!("{x}"); error
+
+    // fn longestE(x: &str, y: &str) -> &str {
+    //     if x.len() > y.len() {
+    //         x
+    //     } else {
+    //         y
+    //     }
+    // }
+
+    // 函数内的生命周期
+    fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+        if x.len() > y.len() {
+            x
+        } else {
+            y
+        }
+    }
+    println!("{}", longest("测试数据1", "测试数据2"));
+
+    // 只需要标注关联的参数生命周期
+    fn longest2<'a>(x: &'a str, y: &str) -> &'a str {
+        x
+    }
+    println!("{}", longest2("x", "y"));
+
+    // 结构体的生命周期标注
+    #[derive(Debug)]
+    struct Person<'a> {
+        name: &'a str,
+    }
+    let p = Person { name: "Jack" };
+    println!("{:#?}", p);
+
+    // 在符合三条消除规则的前提下，可以不用手动标注生命周期
+    fn first_word(s: &str) -> &str {
+        let bytes = s.as_bytes();
+        for (i, &item) in bytes.iter().enumerate() {
+            if b' ' == item {
+                return &s[0..i];
+            }
+        }
+        &s[..]
+    }
+    println!("{}", first_word("Hello World"));
+
+    // 复杂的生命周期标注
+    fn speak_word<'a, T>(x: &'a str, y: &'a str, keywords: T) -> &'a str
+    where
+        T: Display,
+    {
+        println!("{}", keywords);
+
+        if x.len() > y.len() {
+            x
+        } else {
+            y
+        }
+    }
+    speak_word("x", "y", "keywords");
+
+    // 使用返回的生命周期
+    struct ImportantExcerpt<'a> {
+        part: &'a str,
+    }
+    impl<'a> ImportantExcerpt<'a> {
+        fn announce_and_return_part(&'a self, announcement: &'a str) -> &'a str {
+            println!("Attention please: {}", announcement);
+            self.part
+        }
+    }
+
+    let a = ImportantExcerpt { part: "part" };
+    let mut res = "字符串是 'static 生命周期";
+    {
+        let announcement = "hello world".to_string();
+        // res = a.announce_and_return_part(&announcement); error: `announcement` does not live long enough
+        // 编译器只选最短的生命周期那一个，所以即使self和announcement都标注 'a 生命周期在函数内部没有问题，但是最终返回的生命周期是最短的那个生命周期。
+        // 很明显，announcement 活得最短，编译器选了 announcement 的生命周期。
+        // 同时 announcement 活的时间没有返回值 res 的时间长，编译器就直接报错了：announcement does not live long enough
+    }
+    println!("{}", res);
+}
+```
