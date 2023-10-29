@@ -1,5 +1,7 @@
 use core::panic;
 use std::fmt::{Debug, Display};
+use std::fs::File;
+use std::io::ErrorKind;
 
 fn main() {
     /*
@@ -17,7 +19,7 @@ fn main() {
      * ### 1. panic! 与不可恢复错误
      * 对于严重到影响程序运行的错误，触发 panic 是很好的解决方式。在 Rust 中触发 panic 有两种方式：被动触发和主动调用。
      *
-     * #### 被动触发
+     * #### 1. 被动触发
      * 被动触发是指代码中一些错误语法或错误指令触发的，如数组越界、访问不存在的对象等。
      * ```rs
      * let arr = [1, 2, 3];
@@ -25,7 +27,7 @@ fn main() {
      * ```
      * 被动触发的 panic 是我们日常开发中最常遇到的，这也是 Rust 给我们的一种保护，毕竟错误只有抛出来，才有可能被处理，否则只会偷偷隐藏起来，寻觅时机给你致命一击。
      *
-     * #### 主动触发
+     * #### 2. 主动触发
      * 在某些特殊场景中，开发者想要主动抛出一个异常，例如读取文件失败时抛出异常。
      * 对此，Rust 为我们提供了 panic! 宏，当调用执行该宏时，程序会打印出一个错误信息，展开报错点往前的函数调用堆栈，最后退出程序。
      *
@@ -41,16 +43,81 @@ fn main() {
      *     - Linux/macOS 等 UNIX 系统： RUST_BACKTRACE=1 cargo run
      *     - Windows 系统（PowerShell）： $env:RUST_BACKTRACE=1 ; cargo run
      *
-     * ### 2. panic 时停止程序的两种方式
+     * #### 3. panic 时停止程序的两种方式
      * 当出现 panic! 时，程序提供了两种方式来处理终止流程：栈展开和直接终止。默认的方式就是栈展开.
      * - 栈展开： Rust 会回溯栈上数据和函数调用，因此也意味着更多的善后工作，好处是可以给出充分的报错信息和栈调用信息，便于事后的问题复盘。
      * - 直接终止，顾名思义，不清理数据就直接退出程序，善后工作交与操作系统来负责。
      *
-     * ### 3. 线程 panic 后，程序是否会终止？
+     * #### 4. 线程 panic 后，程序是否会终止？
      * 如果是 main 线程，则程序会终止，如果是其它子线程，该线程会终止，但是不会影响 main 线程。因此，**尽量不要在 main 线程中做太多任务，将这些任务交由子线程去做**，就算子线程 panic 也不会导致整个程序的结束。
      * 具体解析见 [panic 原理剖析](https://course.rs/basic/result-error/panic.html#panic-%E5%8E%9F%E7%90%86%E5%89%96%E6%9E%90)。
      *
-     * ### 4. 何时该使用 `panic!` 和  `Result` ？
+     * ### 2. Result 与可恢复的错误
+     * #### 1. 使用Result
+     * 大部分错误并没有严重到需要程序完全停止执行。有时，一个函数会因为一个容易理解并做出反应的原因失败。
+     * 例如，如果因为打开一个并不存在的文件而失败，此时我们可能想要创建这个文件，而不是终止进程。
+     *
+     * 假设我们有一台消息服务器，每个用户都通过 websocket 连接到该服务器来接收和发送消息，该过程就涉及到 socket 文件的读写。
+     * 如果一个用户的读写发生了错误，显然不能直接 panic，否则服务器会直接崩溃，所有用户都会断开连接。
+     * 因此我们需要一种更温和的错误处理方式：Result<T, E>。
+     *
+     * Result的定义如下，泛型参数 T 代表成功时存入的正确值的类型，存放方式是 Ok(T)，E 代表错误时存入的错误值，存放方式是 Err(E)。
+     * ```rs
+     * enum Result<T, E> {
+     *      Ok(T),
+     *      Err(E)
+     * }
+     * ```
+     * 打开文件的示例，File::open 返回一个 Result 类型：`std::result::Result<std::fs::File, std::io::Error>`
+     * ```rs
+     * use std::fs::File;
+     * fn main() {
+     *     let f = File::open("hello.txt");
+     * }
+     * ```
+     * > **如何获知变量类型或者函数的返回类型？**
+     * > 有几种常用的方式，此处更推荐第二种方法：
+     * > - 第一种是查询标准库或者三方库文档，搜索 File，然后找到它的 open 方法
+     * > - 在 Rust IDE 章节，我们推荐了 VSCode IDE 和 rust-analyzer 插件，如果你成功安装的话，那么就可以在 VSCode 中很方便的通过代码跳转的方式查看代码，同时 rust-analyzer 插件还会对代码中的类型进行标注，非常方便好用！
+     * > - 你还可以尝试故意标记一个错误的类型，然后让编译器告诉你。
+     *
+     * 这个返回值类型说明 File::open 调用可能会成功并返回一个可以进行读写的文件句柄。
+     * 这个函数也可能会失败：例如，文件可能并不存在，或者可能没有访问文件的权限。
+     * File::open 需要一个方式告诉我们是成功还是失败，并同时提供给我们文件句柄或错误信息。而这些信息正是 Result 枚举可以提供的。
+     *
+     * ```rs
+     * let f = File::open("hello.txt");
+     * let f = match f {
+     *     Ok(file) => file,
+     *     Err(error) => {
+     *         panic!("Problem opening the file: {:?}", error)
+     *     },
+     * };
+     * ```
+     * 代码很清晰，对打开文件后的 Result<T, E> 类型进行匹配取值。
+     * 如果是成功，则将 Ok(file) 中存放的的文件句柄 file 赋值给 f，如果失败，则将 Err(error) 中存放的错误信息 error 使用 panic 抛出来，进而结束程序。
+     *
+     * #### 2. 对返回值进行处理
+     * 在文件打开的示例代码中，当打开文件错误时，被错误分支捕获并直接执行错误分支panic!，显然这不符合使用Result的可处理错误的目标。
+     * 文件读取失败的原因有很多种，我们需要对部分错误进行特殊处理，而不是所有错误都直接崩溃。
+     * ```rs
+     * let f = File::open("hello.txt");
+     * let f = match f {
+     *     Ok(file) => file,
+     *     Err(error) => match error.kind() {
+     *         ErrorKind::NotFound => match File::create("hello.txt") {
+     *             Ok(fc) => fc,
+     *             Err(e) => panic!("Problem creating the file: {:?}", e),
+     *         },
+     *         other_error => panic!("Problem opening the file: {:?}", other_error),
+     *     },
+     * };
+     * ```
+     * 上面代码在匹配出 error 后，又对 error 进行了详细的匹配解析，最终结果：
+     * - 如果是文件不存在错误 ErrorKind::NotFound，就创建文件，这里创建文件File::create 也是返回 Result，因此继续用 match 对其结果进行处理：创建成功，将新的文件句柄赋值给 f，如果失败，则 panic。
+     * - 剩下的错误，一律 panic
+     *
+     * ### 3. 何时该使用 `panic!` 和  `Result` ？
      * 先来一点背景知识，在前面章节我们粗略讲过 Result<T, E> 这个枚举类型，它是用来表示函数的返回结果：
      * ```rs
      * enum Result<T, E> {
@@ -91,13 +158,19 @@ fn main() {
      * - 内存安全的问题
      *
      * 当错误预期会出现时，返回一个可处理的错误较为合适，例如解析器接收到格式错误的数据，HTTP 请求接收到错误的参数甚至该请求内的任何错误（不会导致整个程序有问题，只影响该次请求）。因为错误是可预期的，因此也是可以处理的。
-     *
      * 当启动时某个流程发生了错误，对后续代码的运行造成了影响，那么就应该使用 panic，而不是处理错误后继续运行，当然你可以通过重试的方式来继续。
-     *
      * 而数组访问越界，就要 panic 的原因，这个就是属于内存安全的范畴，一旦内存访问不安全，那么我们就无法保证自己的程序会怎么运行下去，也无法保证逻辑和数据的正确性。
      *
-     * 大部分语言只有异常一种概念，无论是HTTP请求参数错误还是内存访问越界都是抛出异常的形式处理，这会导致很多的try catch结构。
-     *
+     * ### 4. unwrap 与 expect
+     * 在不需要处理错误的场景，例如写原型、示例时，我们不想使用 match 去匹配 Result<T, E> 以获取其中的 T 值，因为 match 的穷尽匹配特性，你总要去处理下 Err 分支。那么有没有办法简化这个过程？有，答案就是 unwrap 和 expect。
+     * 
+     * expect 跟 unwrap 很像，也是遇到错误直接 panic, 但是会带上自定义的错误提示信息，相当于重载了错误打印的函数：
+     * ```rs
+     * let f = File::open("hello.txt").expect("Failed to open hello.txt");
+     * ```
+     * 因此，expect 相比 unwrap 能提供更精确的错误信息，在有些场景也会更加实用。
+     * 
+     * 
      * ### 4. panic! 原理解析
      *
      * [panic! 原理解析](https://course.rs/basic/result-error/panic.html#panic-%E5%8E%9F%E7%90%86%E5%89%96%E6%9E%90)
@@ -110,4 +183,24 @@ fn main() {
 
     // 主动触发不可恢复错误
     panic!("主动触发错误信息");
+
+    // 打开文件示例
+    let file = File::open("./main 29-返回值和错误处理.rs");
+    // 直接取值
+    let file = File::open("./main 29-返回值和错误处理.rs").unwrap();
+    println!("{:#?}", file);
+
+    let f = File::open("hello.txt");
+
+    let f = match f {
+        Ok(file) => file,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => match File::create("hello.txt") {
+                Ok(fc) => fc,
+                Err(e) => panic!("Problem creating the file: {:?}", e),
+            },
+            other_error => panic!("Problem opening the file: {:?}", other_error),
+        },
+    };
+    println!("{:#?}", f);
 }
