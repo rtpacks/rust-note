@@ -2,6 +2,7 @@ use core::panic;
 use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::ErrorKind;
+use std::io::{self, Read};
 
 fn main() {
     /*
@@ -163,14 +164,107 @@ fn main() {
      *
      * ### 4. unwrap 与 expect
      * 在不需要处理错误的场景，例如写原型、示例时，我们不想使用 match 去匹配 Result<T, E> 以获取其中的 T 值，因为 match 的穷尽匹配特性，你总要去处理下 Err 分支。那么有没有办法简化这个过程？有，答案就是 unwrap 和 expect。
-     * 
+     *
      * expect 跟 unwrap 很像，也是遇到错误直接 panic, 但是会带上自定义的错误提示信息，相当于重载了错误打印的函数：
      * ```rs
      * let f = File::open("hello.txt").expect("Failed to open hello.txt");
      * ```
      * 因此，expect 相比 unwrap 能提供更精确的错误信息，在有些场景也会更加实用。
-     * 
-     * 
+     *
+     * ### 4. 传播错误
+     *
+     * #### 1. 错误传播示例
+     * 程序不太可能只有 A->B 形式的函数调用，一个设计良好的程序，一个功能往往涉及十几层的函数的调用。
+     * 错误处理也往往不是哪里调用出错，就在哪里处理。实际应用中，大概率会把错误层层上传然后交给调用链的上游函数进行处理，**错误传播**将极为常见。
+     *
+     * ```rs
+     * use std::fs::File;
+     * use std::io::{self, Read};
+     *
+     * fn read_username_from_file() -> Result<String, io::Error> {
+     *     // 打开文件，f是`Result<文件句柄,io::Error>`
+     *     let f = File::open("hello.txt");
+     *
+     *     let mut f = match f {
+     *         // 打开文件成功，将file句柄赋值给f
+     *         Ok(file) => file,
+     *         // 打开文件失败，将错误返回(向上传播)
+     *         Err(e) => return Err(e),
+     *     };
+     *     // 创建动态字符串s
+     *     let mut s = String::new();
+     *     // 从f文件句柄读取数据并写入s中
+     *     match f.read_to_string(&mut s) {
+     *         // 读取成功，返回Ok封装的字符串
+     *         Ok(_) => Ok(s),
+     *         // 将错误向上传播
+     *         Err(e) => Err(e),
+     *     }
+     * }
+     * ```
+     * 可以先不用考虑mut等的实现，只需要注意以下几点：
+     * - 该函数返回一个 Result<String, io::Error> 类型，当读取用户名成功时，返回 Ok(String)，失败时，返回 Err(io:Error)
+     * - File::open 和 f.read_to_string 返回的 Result<T, E> 中的 E 就是 io::Error
+     *
+     * 由此可见，该函数将 io::Error 的错误往上进行传播，该函数的调用者最终会对 Result<String,io::Error> 进行再处理，至于怎么处理就是调用者的事。
+     * 如果是错误，它可以选择继续向上传播错误，也可以直接 panic，亦或将具体的错误原因包装后写入 socket 中呈现给终端用户。
+     *
+     * #### 2. 传播错误的简写：? 运算符
+     * 上面的 `read_username_from_file` 函数的match模式匹配中，有很多简单但是又不得不写的逻辑：成功返回值，失败返回错误原因。
+     * 如果结果是 Ok(T)，则把 T 赋值给 f，如果结果是 Err(E)，则返回该错误，所以 ? 特别适合用来传播错误（**return 关键字！**）。
+     *
+     * ```rs
+     * fn read_username_from_file() -> Result<String, io::Error> {
+     *     let mut f = File::open("hello.txt")?;
+     *     let mut s = String::new();
+     *     f.read_to_string(&mut s)?;
+     *     Ok(s)
+     * }
+     * ```
+     *
+     * 其实 ? 就是一个宏，它的作用跟上面的 match 几乎一模一样：
+     * ```rs
+     * let mut f = File::open("hello.txt")?; // ?
+     *
+     * let mut f = match f {
+     *     // 打开文件成功，将file句柄赋值给f
+     *     Ok(file) => file,
+     *     // 打开文件失败，将错误返回(向上传播)
+     *     Err(e) => return Err(e),
+     * };
+     * ```
+     *
+     * #### 3. `?` 的优势
+     * 虽然 ? 和 match 功能一致，但是事实上 ? 会更胜一筹。
+     * 1. 类型提升/转换
+     * 想象一下，一个设计良好的系统中，肯定有自定义的错误特征，错误之间很可能会存在上下级关系。
+     * 例如标准库中的 std::io::Error 和 std::error::Error，前者是 IO 相关的错误结构体，后者是一个最最通用的标准错误特征，同时前者**实现**了后者，因此 std::io::Error 可以转换为 std:error::Error。
+     * 明白了以上的错误转换，? 的更胜一筹就很好理解了，它可以**自动进行类型提升**（转换）：
+     *
+     * ```rs
+     * fn open_file() -> Result<File, Box<dyn std::error::Error>> {
+     *     let mut f = File::open("hello.txt")?;
+     *     Ok(f)
+     * }
+     * ```
+     * File::open 报错时返回的错误是 std::io::Error 类型，但是 open_file 函数返回的错误类型是 std::error::Error 的特征对象，可以看到一个错误类型通过 ? 返回后，变成了另一个错误类型，这就是 ? 的神奇之处。
+     *
+     * `?` 能自动转换的根本原因是：标准库中定义的 From 特征，该特征有一个方法 from，用于把一个类型转成另外一个类型。? 可以自动调用该方法，然后进行隐式类型转换。
+     * 因此只要函数返回的错误 ReturnError 实现了 From<OtherError> 特征，那么 ? 就会自动把 OtherError 转换为 ReturnError。
+     *
+     * 这种转换非常好用，意味着你可以用一个大而全的 ReturnError 来覆盖所有错误类型，只需要为各种子错误类型实现这种转换即可。
+     *
+     * 2. 链式调用
+     * ```rs
+     * fn read_username_from_file() -> Result<String, io::Error> {
+     *     let mut s = String::new();
+     *     File::open("hello.txt")?.read_to_string(&mut s)?;
+     *     Ok(s)
+     * }
+     * ```
+     * 除了支持自动类型提升外，`?` 还支持链式调用。如以上代码，File::open 遇到错误就返回，没有错误就将 Ok 中的值取出来用于下一个方法调用，
+     *
+     *
      * ### 4. panic! 原理解析
      *
      * [panic! 原理解析](https://course.rs/basic/result-error/panic.html#panic-%E5%8E%9F%E7%90%86%E5%89%96%E6%9E%90)
@@ -203,4 +297,61 @@ fn main() {
         },
     };
     println!("{:#?}", f);
+
+    // 错误传播
+    fn read_username_from_file() -> Result<String, io::Error> {
+        // 打开文件，f是`Result<文件句柄,io::Error>`
+        let f = File::open("hello.txt");
+
+        let mut f = match f {
+            // 打开文件成功，将file句柄赋值给f
+            Ok(file) => file,
+            // 打开文件失败，将错误返回(向上传播)
+            Err(e) => return Err(e),
+        };
+        // 创建动态字符串s
+        let mut s = String::new();
+        // 从f文件句柄读取数据并写入s中
+        match f.read_to_string(&mut s) {
+            // 读取成功，返回Ok封装的字符串
+            Ok(_) => Ok(s),
+            // 将错误向上传播
+            Err(e) => Err(e),
+        }
+    }
+
+    fn read_from_file() -> Result<String, io::Error> {
+        let f = File::open("hello.txt");
+
+        let mut f = match f {
+            Ok(file) => file,
+            Err(e) => return Err(e),
+        };
+
+        // 创建动态字符串
+        let mut s = String::new();
+
+        match f.read_to_string(&mut s) {
+            Ok(_) => Ok(s),
+            Err(e) => Err(e),
+        }
+    }
+
+    // 使用?简化错误传播形式
+    fn read_username_from_file2() -> Result<String, io::Error> {
+        // 创建动态字符串s
+        let mut s = String::new();
+        // 打开文件，f是`Result<文件句柄,io::Error>`
+        let mut f = File::open("hello.txt")?;
+        // 从f文件句柄读取数据并写入s中
+        f.read_to_string(&mut s)?;
+        Ok(s)
+    }
+
+    // ? 支持链式调用，简化形式
+    fn read_username_from_file3() -> Result<String, io::Error> {
+        let mut s = String::new();
+        File::open("hello.txt")?.read_to_string(&mut s)?;
+        Ok(s)
+    }
 }
