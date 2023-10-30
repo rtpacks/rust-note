@@ -171,7 +171,7 @@ fn main() {
      * ```
      * 因此，expect 相比 unwrap 能提供更精确的错误信息，在有些场景也会更加实用。
      *
-     * ### 4. 传播错误
+     * ### 5. 传播错误
      *
      * #### 1. 错误传播示例
      * 程序不太可能只有 A->B 形式的函数调用，一个设计良好的程序，一个功能往往涉及十几层的函数的调用。
@@ -264,11 +264,45 @@ fn main() {
      * ```
      * 除了支持自动类型提升外，`?` 还支持链式调用。如以上代码，File::open 遇到错误就返回，没有错误就将 Ok 中的值取出来用于下一个方法调用，
      *
+     * 3. Option传播
+     * 除了Result传播外，`?` 还可以用于Option传播。Result 通过 ? 返回**值或者错误**，Option 通过 ? 返回**值或者None**。注意是值而不是Result或Option
+     * ```rs
+     * pub enum Option<T> {
+     *     Some(T),
+     *     None
+     * }
+     * // 简化match
+     * fn first(arr: &[i32]) -> Option<&i32> {
+     *     let v = arr.get(0)?;
+     *     Some(v)
+     * }
+     * // 链式调用
+     * fn last_char_of_first_line(text: &str) -> Option<char> {
+     *     text.lines().next()?.chars().last()
+     * }
+     * ```
      *
-     * ### 4. panic! 原理解析
+     * 在使用 `?` 的过程中，常常会犯直接取值返回的错误，需要记住：**`?` 直接取出并返回的是值，打断当前执行并返回的是错误**：
+     * ```rs
+     * // 常见错误
+     * fn first3(arr: &[i32]) -> Option<&i32> {
+     *     // arr.get(0)? 直接返回值或错误，而不是返回Option包裹的值
+     *     Some(arr.get(0)?) // 正确
+     * }
+     * fn first4(arr: &[i32]) -> Option<String> {
+     *     // arr.get(0)?.to_string() 直接返回值
+     *     Some(arr.get(0)?.to_string()) // 正确
+     * }
+     * ```
+     * 总结：**`?` 直接取出并返回的是值，打断当前执行并返回的是错误**
+     *
+     * ### 6. panic! 原理解析
      *
      * [panic! 原理解析](https://course.rs/basic/result-error/panic.html#panic-%E5%8E%9F%E7%90%86%E5%89%96%E6%9E%90)
      *
+     * ### 7. 拓展阅读
+     * - [带返回值的 main 函数](https://course.rs/basic/result-error/result.html#%E5%B8%A6%E8%BF%94%E5%9B%9E%E5%80%BC%E7%9A%84-main-%E5%87%BD%E6%95%B0)
+     * - [try!](https://course.rs/basic/result-error/result.html#try)
      */
 
     // 被动触发不可恢复错误
@@ -353,5 +387,23 @@ fn main() {
         let mut s = String::new();
         File::open("hello.txt")?.read_to_string(&mut s)?;
         Ok(s)
+    }
+
+    // 支持Option
+    fn first(arr: &[i32]) -> Option<&i32> {
+        arr.get(0)
+    }
+    // 链式
+    fn first2(arr: &[i32]) -> Option<String> {
+        Some(arr.get(0)?.to_string())
+    }
+    // 常见错误
+    fn first3(arr: &[i32]) -> Option<&i32> {
+        // arr.get(0)? 直接返回值或错误，而不是返回Option包裹的值
+        Some(arr.get(0)?) // 正确
+    }
+    fn first4(arr: &[i32]) -> Option<String> {
+        // arr.get(0)?.to_string() 直接返回值
+        Some(arr.get(0)?.to_string()) // 正确
     }
 }
