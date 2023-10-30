@@ -347,3 +347,111 @@ fn first4(arr: &[i32]) -> Option<String> {
 
 - [带返回值的 main 函数](https://course.rs/basic/result-error/result.html#%E5%B8%A6%E8%BF%94%E5%9B%9E%E5%80%BC%E7%9A%84-main-%E5%87%BD%E6%95%B0)
 - [try!](https://course.rs/basic/result-error/result.html#try)
+
+### code
+
+```rs
+fn main {
+    // 被动触发不可恢复错误
+    let arr = [1, 2, 3];
+    // println!("{}", arr[99]); // 数组越界
+
+    // 主动触发不可恢复错误
+    panic!("主动触发错误信息");
+
+    // 打开文件示例
+    let file = File::open("./main 29-返回值和错误处理.rs");
+    // 直接取值
+    let file = File::open("./main 29-返回值和错误处理.rs").unwrap();
+    println!("{:#?}", file);
+
+    let f = File::open("hello.txt");
+
+    let f = match f {
+        Ok(file) => file,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => match File::create("hello.txt") {
+                Ok(fc) => fc,
+                Err(e) => panic!("Problem creating the file: {:?}", e),
+            },
+            other_error => panic!("Problem opening the file: {:?}", other_error),
+        },
+    };
+    println!("{:#?}", f);
+
+    // 错误传播
+    fn read_username_from_file() -> Result<String, io::Error> {
+        // 打开文件，f是`Result<文件句柄,io::Error>`
+        let f = File::open("hello.txt");
+
+        let mut f = match f {
+            // 打开文件成功，将file句柄赋值给f
+            Ok(file) => file,
+            // 打开文件失败，将错误返回(向上传播)
+            Err(e) => return Err(e),
+        };
+        // 创建动态字符串s
+        let mut s = String::new();
+        // 从f文件句柄读取数据并写入s中
+        match f.read_to_string(&mut s) {
+            // 读取成功，返回Ok封装的字符串
+            Ok(_) => Ok(s),
+            // 将错误向上传播
+            Err(e) => Err(e),
+        }
+    }
+
+    fn read_from_file() -> Result<String, io::Error> {
+        let f = File::open("hello.txt");
+
+        let mut f = match f {
+            Ok(file) => file,
+            Err(e) => return Err(e),
+        };
+
+        // 创建动态字符串
+        let mut s = String::new();
+
+        match f.read_to_string(&mut s) {
+            Ok(_) => Ok(s),
+            Err(e) => Err(e),
+        }
+    }
+
+    // 使用?简化错误传播形式
+    fn read_username_from_file2() -> Result<String, io::Error> {
+        // 创建动态字符串s
+        let mut s = String::new();
+        // 打开文件，f是`Result<文件句柄,io::Error>`
+        let mut f = File::open("hello.txt")?;
+        // 从f文件句柄读取数据并写入s中
+        f.read_to_string(&mut s)?;
+        Ok(s)
+    }
+
+    // ? 支持链式调用，简化形式
+    fn read_username_from_file3() -> Result<String, io::Error> {
+        let mut s = String::new();
+        File::open("hello.txt")?.read_to_string(&mut s)?;
+        Ok(s)
+    }
+
+    // 支持Option
+    fn first(arr: &[i32]) -> Option<&i32> {
+        arr.get(0)
+    }
+    // 链式
+    fn first2(arr: &[i32]) -> Option<String> {
+        Some(arr.get(0)?.to_string())
+    }
+    // 常见错误
+    fn first3(arr: &[i32]) -> Option<&i32> {
+        // arr.get(0)? 直接返回值或错误，而不是返回Option包裹的值
+        Some(arr.get(0)?) // 正确
+    }
+    fn first4(arr: &[i32]) -> Option<String> {
+        // arr.get(0)?.to_string() 直接返回值
+        Some(arr.get(0)?.to_string()) // 正确
+    }
+}
+```
