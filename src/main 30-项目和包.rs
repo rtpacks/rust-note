@@ -6,7 +6,7 @@ use std::io::{self, Read};
 
 fn main() {
     /*
-     * ## 项目和包
+     * ## 项目Package和包Crate
      * 将大的代码文件拆分成包和模块，有利于实现代码抽象和复用。Rust 也提供了相应概念用于代码的组织管理：
      * - 项目(Packages)：一个 Cargo 提供的 feature，可以用来构建、测试和分享包
      * - 工作空间(WorkSpace)：对于大型项目，可以进一步将多个包联合在一起，组织成工作空间
@@ -109,7 +109,7 @@ fn main() {
      *
      * 既然可执行包有多个，那么一个src/main.rs就不够用了，因为一个`main.rs`就表示一个可执行包。
      * 其他的可执行包就得放到 src/bin 下面，每个crate一个文件，换句话说，每个文件都是一个不同的bin crate。
-     * 
+     *
      * ### 3. 阅读
      * - https://course.rs/basic/crate-module/crate.html
      * - http://liubin.org/blog/2021/01/19/packages-slash-crate-slash-modules-in-rust/
