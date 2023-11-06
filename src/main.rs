@@ -6,7 +6,7 @@ use std::io::{self, Read};
 
 fn main() {
     /*
-     * ## 单元 Module
+     * ## 模块 Module
      * 一个 `src/lib.rs` 或 `src/main.rs` 就是一个包Crate，一个包可能是多种功能的集合体。为了项目工程（Package）的组织维护，需要对包进行拆分。
      *
      * 模块Module（mod）是**rust代码的构成单元**，是代码拆分的单位（文件/文件夹）。
@@ -40,6 +40,7 @@ fn main() {
      *     mod serving {
      *         fn take_order() {}
      *         fn serve_order() {}
+     *         fn take_payment() {}
      *     }
      * }
      * ```
@@ -51,8 +52,21 @@ fn main() {
      * - 所有模块均定义在同一个文件中
      * 类似上述代码中所做的，使用模块就能将功能相关的代码组织到一起，然后通过一个模块名称来说明这些代码为何被组织在一起。
      *
+     * `src/main.rs` 和 `src/lib.rs` 被称为包的根（ crate 根），如此称呼的原因是，这两个文件中**任意一个的内容**都可以构成名为 crate 的模块。
+     * 该模块位于包的树形结构(由模块组成的树形结构)的根部（"at the root of the crate’s module structure"）。
+     * 这种树形结构展示了模块之间彼此的嵌套关系，因此被称为**模块树**，`src/main.rs`和`src/lib.rs`文件的内容组成了一个**虚拟的模块**，模块的名称就是 `crate`。
      *
+     * ```sh
+     * crate
+     *  └── front_of_house
+     *      ├── hosting
+     *      │   ├── add_to_waitlist
+     *      │   └── seat_at_table
+     *      └── serving
+     *          ├── take_order
+     *          ├── serve_order
+     *          └── take_payment
+     * ```
      *
-     * 以lib类型的crate为例，该crate的入口在src/lib.rs，也是crate的根。
      */
 }
