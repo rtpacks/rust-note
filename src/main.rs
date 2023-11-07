@@ -67,6 +67,91 @@ fn main() {
      *          ├── serve_order
      *          └── take_payment
      * ```
+     * 注意：以上树形结构中的各个`fn`不是模块，而是模块的一部分，这里为了表现模块树的结构将其展示出来。
+     *
+     * #### 父子模块
+     * 如果模块 A 包含模块 B，那么 A 是 B 的父模块，B 是 A 的子模块。如 front_of_house 是 hosting 和 serving 的父模块，反之后两者是前者的子模块。
+     *
+     * ### 2. 路径与引用
+     * 模块树的结构和计算机上文件系统目录树非常相似，不仅仅是组织结构上的相似，就连使用方式都很相似：每个文件都有自己的路径，用户可以通过这些路径使用它们。在 Rust 中也是通过路径的方式来引用模块。
+     *
+     * 路径有两种形式：
+     * - 绝对路径（absolute path）从 crate 根部开始，以 crate 名或者字面量 crate 开头
+     * - 相对路径（relative path）从当前模块开始，以 self、super 或当前模块的标识符开头
+     * 绝对路径和相对路径都后跟一个或多个由双冒号（::）分割的标识符。
+     *
+     * 如果读者有前端项目经验，绝对路径的导入就类似于路径别名`@/`，相对路径则类似`./`形式。
+     * rust用`crate`表示包的根（create root），用 `self` 表示当前 `./`，用 `super` 表示上级 `../`，用 `::` 表示下级 `./xx`。
+     *
+     * 继续拓展 `restaurant` 餐馆例子，给 `src/lib.rs` 加入函数 `eat_at_restaurant` ：
+     * ```rs
+     * mod front_of_house {
+     *     // 招待客人
+     *     pub mod hosting {
+     *         pub fn add_to_waitlist() {}
+     *         fn seat_at_table() {}
+     *     }
+     *     // 服务客人
+     *     mod serving {
+     *         fn take_order() {}
+     *         fn serve_order() {}
+     *         fn take_payment() {}
+     *     }
+     * }
+     *
+     * pub fn eat_at_restaurant() {
+     *     // 绝对路径
+     *     crate::front_of_house::hosting::add_to_waitlist();
+     *     // 相对路径
+     *     front_of_house::hosting::add_to_waitlist();
+     * }
+     * ```
+     * #### 绝对路径
+     * 因为 eat_at_restaurant 和 add_to_waitlist 都定义在一个包中（lib crate），因此在绝对路径引用时可以直接以 crate 开头，然后逐层引用，每一层之间使用 `::` 分隔：
+     * ```rs
+     * crate::front_of_house::hosting::add_to_waitlist();
+     * ```
+     *
+     * #### 相对路径
+     * 在 `restaurant` 的代码示例中，可以直接访问当前包内的模块，而不需要绝对路径：
+     * ```rs
+     * front_of_house::hosting::add_to_waitlist();
+     * ```
+     * 
+     * #### 绝对路径还是相对路径？
+     * 如果不确定哪个好，你可以考虑优先使用绝对路径，因为调用的地方和定义的地方往往是分离的，而定义的地方较少会变动。
+     *
+     * ### 3. 代码可见性
+     * 在路径引用中，加入了`pub`关键字避免无法访问模块，这是因为 Rust 出于安全的考虑，默认情况下所有的类型都是私有化的，包括函数、方法、结构体、枚举、常量，就连模块本身也是私有化的。
+     * 如果希望被外部访问，那么需要给指定的项加上 `pub` 关键字。
+     * 值得注意的是：虽然父模块完全无法访问子模块中的私有项，但是**子模块却可以访问父模块、祖父模块等上级模块的私有项。**
+     *
+     * ```rs
+     * mod front_of_house {
+     *      pub clean() {} // 用pub声明的项才可以被外部访问，但内部的子项可以访问父、祖父的私有项
+     * }
+     * ```
+     * 
      *
      */
+
+    // 餐厅前厅，用于吃饭
+    mod front_of_house {
+        fn clean() {}
+
+        // 招待客人
+        pub mod hosting {
+            pub fn add_to_waitlist() {}
+
+            fn seat_at_table() {}
+        }
+        // 服务客人
+        mod serving {
+            fn take_order() {}
+            fn serve_order() {}
+            fn take_payment() {}
+        }
+    }
+
+    front_of_house::hosting::add_to_waitlist()
 }
