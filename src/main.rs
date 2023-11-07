@@ -113,11 +113,31 @@ fn main() {
      * ```
      *
      * #### 相对路径
-     * 在 `restaurant` 的代码示例中，可以直接访问当前包内的模块，而不需要绝对路径：
+     * 1. 在 `restaurant` 的代码示例中，可以直接访问当前包内的模块，而不需要绝对路径：
      * ```rs
      * front_of_house::hosting::add_to_waitlist();
      * ```
-     * 
+     * 2. 除了直接访问包内模块，相对路径还可以使用 `self`、`super`、`crate` 访问其他的模块，注意需要在库类型的包（ `lib crate src/lib.rs` ）中测试：
+     * ```rs
+     * fn cleanTable() {}
+     *
+     * mod front_of_house {
+     *     // 招待客人
+     *     pub mod hosting {
+     *         pub fn add_to_waitlist() {}
+     *         fn seat_at_table() {
+     *              super::clean(); // 调用父模块的方法
+     *              self::add_to_waitlist(); // 调用自身模块的方法
+     *         }
+     *     }
+     *     fn clean() {
+     *          crate::cleanTable(); // 调用的是crate包中的方法
+     *          super::cleanTable(); // 同样可以使用super调用父级模块的方法
+     *     }
+     * }
+     * ```
+     * `clean` 方法可以使用 `super` 的原因是：在之前提到过，`src/lib.rs` 和 `src/main.rs` 的任一文件的内容都可以组成名称为 `crate` 的虚拟模块，子模块调用父模块的方法使用 `super`。
+     *
      * #### 绝对路径还是相对路径？
      * 如果不确定哪个好，你可以考虑优先使用绝对路径，因为调用的地方和定义的地方往往是分离的，而定义的地方较少会变动。
      *
@@ -131,7 +151,7 @@ fn main() {
      *      pub clean() {} // 用pub声明的项才可以被外部访问，但内部的子项可以访问父、祖父的私有项
      * }
      * ```
-     * 
+     *
      *
      */
 
