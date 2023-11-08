@@ -266,3 +266,31 @@ src
 
 细心观察就可以发现，文件夹不完全管理模块只是将子模块放入文件夹并在入口文件声明子模块关系，与模块文件的形式非常像。
 两者之间的最大区别在于：**文件夹不完全管理模块将所有的子模块放入与模块同名的文件夹中管理，而模块文件形式是所有子模块放在与父模块同级的层级下。**
+
+### code
+
+更多 code 参考 `src/lib.rs`、`src/front_of_house`、`src/back_of_house`
+
+```rs
+fn main {
+    // 餐厅前厅，用于吃饭
+    mod front_of_house {
+        fn clean() {}
+
+        // 招待客人
+        pub mod hosting {
+            pub fn add_to_waitlist() {}
+
+            fn seat_at_table() {}
+        }
+        // 服务客人
+        mod serving {
+            fn take_order() {}
+            fn serve_order() {}
+            fn take_payment() {}
+        }
+    }
+
+    front_of_house::hosting::add_to_waitlist()
+}
+```
