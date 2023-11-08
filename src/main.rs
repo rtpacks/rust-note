@@ -130,6 +130,12 @@ fn main() {
      *              self::add_to_waitlist(); // 调用自身模块的方法
      *         }
      *     }
+     *     // 服务客人
+     *     mod serving {
+     *         fn take_order() {}
+     *         fn serve_order() {}
+     *         fn take_payment() {}
+     *     }
      *     fn clean() {
      *          crate::cleanTable(); // 调用的是crate包中的方法
      *          super::cleanTable(); // 同样可以使用super调用父级模块的方法
@@ -148,7 +154,9 @@ fn main() {
      *
      * ```rs
      * mod front_of_house {
-     *      pub clean() {} // 用pub声明的项才可以被外部访问，但内部的子项可以访问父、祖父的私有项
+     *     pub fn clean() {
+     *          super::cleanTable(); // 模块内的项用pub声明的项才可以被外部访问，但内部的子项访问父、祖父的私有项不受 `pub` 的限制
+     *     }
      * }
      * ```
      *
@@ -161,6 +169,44 @@ fn main() {
      * 原因在于，枚举和结构体的使用方式不一样。如果枚举的成员对外不可见，那该枚举将一点用都没有，因此枚举成员的可见性自动跟枚举可见性保持一致，这样可以简化用户的使用。
      *
      * 而结构体的应用场景比较复杂，其中的字段也往往部分在 A 处被使用，部分在 B 处被使用，因此无法确定成员的可见性，那索性就设置为全部不可见，将选择权交给程序员。
+     *
+     * ### 5. 将模块拆分到不同的文件
+     * 在模块拆分时提到过，嵌套的模块（Module mod）不仅可以在一个文件，也可以通过文件夹（多文件）的形式管理。
+     *
+     * 现在将模块 `front_of_house` 从 `src/lib.rs` 中抽出来作为一个 `src/front_of_house.rs` 模块文件：
+     * ```rs
+     * // 招待客人
+     * pub mod hosting {
+     *     pub fn add_to_waitlist() {}
+     *     fn seat_at_table() {
+     *          super::clean(); // 调用父模块的方法
+     *          self::add_to_waitlist(); // 调用自身模块的方法
+     *     }
+     * }
+     * // 服务客人
+     * mod serving {
+     *     fn take_order() {}
+     *     fn serve_order() {}
+     *     fn take_payment() {}
+     * }
+     * fn clean() {
+     *      crate::cleanTable(); // 调用的是crate包中的方法
+     *      super::cleanTable(); // 同样可以使用super调用父级模块的方法
+     * }
+     * ```
+     * 抽离单独文件后还需要关联原有的关系，让rust编译器知道属于抽离的文件属于子模块。在 `src/lib.rs` 中用 `mod` 声明：
+     * ```rs
+     * mod front_of_house; // 声明 front_of_house 属于子模块，编译时编译器会将子模块的代码插入到此位置
+     * 
+     * pub fn eat_at_restaurant() {
+     *     // 绝对路径
+     *     crate::front_of_house::hosting::add_to_waitlist();
+     *     // 相对路径
+     *     front_of_house::hosting::add_to_waitlist();
+     * }
+     * ```
+     * 用 `mod` 声明子模块，后续的名称就是模块对应的文件名，同时也是模块的名称！
+     *
      *
      *
      */
