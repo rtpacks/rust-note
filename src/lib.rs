@@ -1,5 +1,7 @@
 mod front_of_house;
 
+mod back_of_house;
+
 fn cleanTable() {}
 
 pub fn eat_at_restaurant() {
