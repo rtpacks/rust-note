@@ -242,7 +242,7 @@ pub fn eat_at_restaurant() {
 
 文件夹完全管理模块，需要在模块文件夹内创建一个 mod.rs 入口文件。在 rustc 版本 1.30 之前，这是文件夹管理模块唯一的形式：
 
-```rs
+```sh
 src
  │─ lib.rs
  └─ front_of_house
@@ -255,7 +255,7 @@ src
 
 在文件夹完全管理模块的形式中，每一个模块文件夹都定义 `mod.rs` 入口文件会造成大量同名的 mod.rs 文件，所以将入口文件 `mod.rs` 提出来并重命名为模块目录名称：
 
-```rs
+```sh
 src
  │─ lib.rs
  │─ front_of_house.rs // 入口文件，与模块目录名称相同
