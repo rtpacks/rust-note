@@ -9,4 +9,4 @@ fn clean() {
 pub mod hosting;
 
 // 服务客人
-mod serving;
+pub mod serving;

@@ -1,3 +1,6 @@
+use crate::front_of_house::hosting;
+use front_of_house::serving;
+
 mod front_of_house;
 
 mod back_of_house;
@@ -5,8 +8,12 @@ mod back_of_house;
 fn cleanTable() {}
 
 pub fn eat_at_restaurant() {
-    // 绝对路径
+    // 绝对路径使用模块（方法）
     crate::front_of_house::hosting::add_to_waitlist();
-    // 相对路径
+    // 相对路径使用模块（方法）
     front_of_house::hosting::add_to_waitlist();
+    // use绝对路径导入并使用模块（方法）
+    hosting::add_to_waitlist();
+    // use相对路径导入并使用模块（方法）
+    serving::take_payment();
 }
