@@ -77,5 +77,22 @@ fn main() {
      * fn function2() -> IoResult<()> {}
      * ```
      *
+     * ### 3. 引入项再导出 re-exporting
+     * 当外部的模块项 A 被引入到当前模块中时，它的可见性自动被设置为私有的，可以对它进行再导出以允许其它外部代码引用模块项 A，在 `src/lib.rs` 中，对 `front_of_house::hosting` 再导出：
+     * ```rs
+     * pub use crate::front_of_house::hosting; // 在 use 关键字前使用 pub 再导出
+     *
+     * pub fn eat_at_restaurant() {
+     *     hosting::add_to_waitlist();
+     *     hosting::add_to_waitlist();
+     *     hosting::add_to_waitlist();
+     * }
+     * ```
+     * 当希望将内部的实现细节隐藏起来或者按照某个目的组织代码时，可以使用 pub use 再导出。
+     * 例如统一使用一个模块来提供对外的 API，那该模块就可以引入其它模块中的 API然后进行再导出，最终对于用户来说，所有的 API 都是由一个模块统一提供的。
+     * 
+     * > 如果你有前端项目经验，会发现很多项目都会把内部的实现逻辑隐藏起来，然后通过 `index(.ts|.js|.tsx|.jsx)` 统一导出内部项。
+     * 
+     * 
      */
 }
