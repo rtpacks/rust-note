@@ -102,6 +102,38 @@ fn main() {
      * ```
      * 注意：需要使用 use 引入第三方包 rand 中的 Rng 特征，因为调用的 gen_range 方法定义在该特征中，需要在当前作用域确定方法的来源。
      *
+     * Rust 社区已经为我们贡献了大量高质量的第三方包，你可以在 crates.io 或者 lib.rs 中检索和使用，从目前来说查找包更推荐 lib.rs，搜索功能更强大，内容展示也更加合理，但是下载依赖包还是得用crates.io。
+     *
+     * ### 5. 简化导入方式
+     *
+     *  #### 1. 使用 {} 简化引入方式
+     * 在相同的包/模块中导入不同的子模块（子项）时，可以使用 `{}` 合并导入
+     * ```rs
+     * use std::collections::{HashMap,BTreeMap,HashSet};
+     * use std::{cmp::Ordering, io};
+     * ```
+     *
+     * #### 2. self
+     * 如果希望同时导入模块本身和子模块
+     * ```rs
+     * use std::io;
+     * use std::io::Write;
+     *
+     * // 使用{}合并导入模块自身和子项
+     * use std::io::{self, Write};
+     * ```
+     * 上面使用到了模块章节提到的 self 关键字，用来替代模块自身，结合上一节中的 self，可以得出它在模块中的两个用途：
+     * - use self::xxx，表示加载当前模块中的 xxx。此时 self 可省略
+     * - use xxx::{self, yyy}，表示，加载当前路径下模块 xxx 本身，以及模块 xxx 下的 yyy
+     *
+     * #### 3. * 引入模块下的所有项
+     * 对于之前一行一行引入 std::collections 的方式，还可以使用 `*` 导入模块下的所有子项：
+     * ```rs
+     * use std::collections::*;
+     * ```
+     * 当使用 * 来引入的时候要格外小心，因为很难知道到底哪些被引入到了当前作用域中，有哪些会和自己程序中的名称冲突，在实际项目中，这种引用方式往往用于快速写测试代码。
+     *
+     *
      */
 
     let secret_number = rand::thread_rng().gen_range(1..10);
