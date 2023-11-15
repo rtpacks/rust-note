@@ -1,8 +1,4 @@
-use core::panic;
-use std::fmt::{Debug, Display};
-use std::fs::File;
-use std::io::ErrorKind;
-use std::io::{self, Read};
+use rand::Rng;
 
 fn main() {
     /*
@@ -90,9 +86,23 @@ fn main() {
      * ```
      * 当希望将内部的实现细节隐藏起来或者按照某个目的组织代码时，可以使用 pub use 再导出。
      * 例如统一使用一个模块来提供对外的 API，那该模块就可以引入其它模块中的 API然后进行再导出，最终对于用户来说，所有的 API 都是由一个模块统一提供的。
-     * 
+     *
      * > 如果你有前端项目经验，会发现很多项目都会把内部的实现逻辑隐藏起来，然后通过 `index(.ts|.js|.tsx|.jsx)` 统一导出内部项。
-     * 
-     * 
+     *
+     * ### 4. 使用第三方包
+     * 除了内置模块和自定义模块外，还可以使用其他开发者提供的包/模块，以下是引入第三方包的流程：
+     * 1. 修改 Cargo.toml 文件，在 [dependencies] 区域添加一行：rand = "0.8.3"
+     * 2. 等待相应的插件如 `rust-analyzer` 拉去完成后，就可以在需要的位置使用 `use` 导入该包
+     *
+     * ```rs
+     * use rand::Rng;
+     * fn main() {
+     *     let secret_number = rand::thread_rng().gen_range(1..101);
+     * }
+     * ```
+     * 注意：需要使用 use 引入第三方包 rand 中的 Rng 特征，因为调用的 gen_range 方法定义在该特征中，需要在当前作用域确定方法的来源。
+     *
      */
+
+    let secret_number = rand::thread_rng().gen_range(1..10);
 }
