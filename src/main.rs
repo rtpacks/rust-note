@@ -113,7 +113,7 @@ fn main() {
      * use std::{cmp::Ordering, io};
      * ```
      *
-     * #### 2. self
+     * #### 2. self 导入模块自身和子模块
      * 如果希望同时导入模块本身和子模块
      * ```rs
      * use std::io;
@@ -133,8 +133,71 @@ fn main() {
      * ```
      * 当使用 * 来引入的时候要格外小心，因为很难知道到底哪些被引入到了当前作用域中，有哪些会和自己程序中的名称冲突，在实际项目中，这种引用方式往往用于快速写测试代码。
      *
+     * ### 6. 受限的可见性
+     * 可见性概念是模块体系中最为核心的概念，它控制了模块中哪些内容可以被外部看见。在实际使用时，还需要达到哪些外部可见，这就是受限可见性。[Rust 语言圣经 - 受限可见性](https://course.rs/basic/crate-module/use.html#%E5%8F%97%E9%99%90%E7%9A%84%E5%8F%AF%E8%A7%81%E6%80%A7)
+     *
+     * 如果我们想要让某一项可以在整个包中都可以被使用，那么有两种办法：
+     * - 在crate 根中定义一个非 pub 类型的项，因为父模块的项对子模块都是可见的，因此 create 根中的项对模块树上的所有模块都是可见的
+     * - 在子模块中定义一个 pub 类型的项，同时通过 use 将其引入到 crate 根，和上一条一样，由于父模块的项对子模块都是可见的，所以 crate 根中的项对模块树上的所有模块都是可见的
+     *
+     * 以上两种方式不能做到控制一个项，让某些模块可见或者让某些模块不可见，但是有时又希望一个项对于某些特定的模块可见，但是对于其他模块又不可见。
+     * 
+     * 此时需要使用 `pub(in mod)` 形式限制项的可见范围：
+     *
+     * ```rs
+     * pub mod a {
+     *     pub const I: i32 = 3;
+     *     fn calc(x: i32) -> i32 {
+     *         use self::b1::b2::J;
+     *         // use self::c1::c2::J; c2和J是不对外暴露的，所以无法解析这个项
+     *         x + J
+     *     }
+     *
+     *     pub fn bar(z: i32) -> i32 {
+     *         calc(I) * z
+     *     }
+     *     // 使用 pub(in mod) 形式可以限制项的可见范围
+     *     mod b1 {
+     *         pub(in crate::a) mod b2 {
+     *             pub(in crate::a) const J: i32 = 4;
+     *         }
+     *     }
+     *     // 子模块的项对父模块来说是透明的（不可见的）
+     *     mod c1 {
+     *         mod c2 {
+     *             const J: i32 = 5;
+     *         }
+     *     }
+     * }
+     * ```
      *
      */
 
     let secret_number = rand::thread_rng().gen_range(1..10);
+
+    // 在lib.rs中，添加以下代码
+    pub mod a {
+        pub const I: i32 = 3;
+        fn calc(x: i32) -> i32 {
+            use self::b1::b2::J;
+            // use self::c1::c2::J; c2和J是不对外暴露的，所以无法解析这个项
+            x + J
+        }
+
+        pub fn bar(z: i32) -> i32 {
+            calc(I) * z
+        }
+        // 使用 pub(in mod) 形式可以限制项的可见范围
+        mod b1 {
+            pub(in crate::a) mod b2 {
+                pub(in crate::a) const J: i32 = 4;
+            }
+        }
+        // 子模块的项对父模块来说是透明的（不可见的）
+        mod c1 {
+            mod c2 {
+                const J: i32 = 5;
+            }
+        }
+    }
 }
