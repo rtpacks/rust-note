@@ -141,20 +141,28 @@ fn main() {
      * - 在子模块中定义一个 pub 类型的项，同时通过 use 将其引入到 crate 根，和上一条一样，由于父模块的项对子模块都是可见的，所以 crate 根中的项对模块树上的所有模块都是可见的
      *
      * 以上两种方式不能做到控制一个项，让某些模块可见或者让某些模块不可见，但是有时又希望一个项对于某些特定的模块可见，但是对于其他模块又不可见。
-     * 
+     *
      * 此时需要使用 `pub(in mod)` 形式限制项的可见范围：
      *
      * ```rs
+     * // 在lib.rs中，添加以下代码
      * pub mod a {
      *     pub const I: i32 = 3;
      *     fn calc(x: i32) -> i32 {
-     *         use self::b1::b2::J;
-     *         // use self::c1::c2::J; c2和J是不对外暴露的，所以无法解析这个项
-     *         x + J
+     *         use self::a1::a2::J as AJ;
+     *         use self::b1::b2::J as BJ;
+     *         // use self::c1::c2::J as CJ; c2和J不对外暴露，父模块不能读取，无法解析这个项
+     *         x + BJ
      *     }
      *
      *     pub fn bar(z: i32) -> i32 {
      *         calc(I) * z
+     *     }
+     *     // 使用 pub 形式不限制暴露子项
+     *     mod a1 {
+     *         pub mod a2 {
+     *             pub const J: i32 = 3;
+     *         }
      *     }
      *     // 使用 pub(in mod) 形式可以限制项的可见范围
      *     mod b1 {
@@ -170,34 +178,44 @@ fn main() {
      *     }
      * }
      * ```
-     *
+     * 在以上代码中，有三个模块，它们的作用如下：
+     * - a 模块使用 pub 不限制对外暴露子项 `a1`
+     * - b 模块使用 pub(in mod) 限制子项 `b2`` 的可见范围
+     * - c 模块中 `c2` 是私有模块，`calc` 函数无法调用 `c2` `J` 项，这是因为 c2 和 J 不对外暴露，父模块不能读取，不能解析这两个项。
      */
 
     let secret_number = rand::thread_rng().gen_range(1..10);
 
     // 在lib.rs中，添加以下代码
-    pub mod a {
-        pub const I: i32 = 3;
-        fn calc(x: i32) -> i32 {
-            use self::b1::b2::J;
-            // use self::c1::c2::J; c2和J是不对外暴露的，所以无法解析这个项
-            x + J
-        }
+    // pub mod a {
+    //     pub const I: i32 = 3;
+    //     fn calc(x: i32) -> i32 {
+    //         use self::a1::a2::J as AJ;
+    //         use self::b1::b2::J as BJ;
+    //         // use self::c1::c2::J as CJ; c2和J不对外暴露，父模块不能读取，无法解析这个项
+    //         x + BJ
+    //     }
 
-        pub fn bar(z: i32) -> i32 {
-            calc(I) * z
-        }
-        // 使用 pub(in mod) 形式可以限制项的可见范围
-        mod b1 {
-            pub(in crate::a) mod b2 {
-                pub(in crate::a) const J: i32 = 4;
-            }
-        }
-        // 子模块的项对父模块来说是透明的（不可见的）
-        mod c1 {
-            mod c2 {
-                const J: i32 = 5;
-            }
-        }
-    }
+    //     pub fn bar(z: i32) -> i32 {
+    //         calc(I) * z
+    //     }
+    //     // 使用 pub 形式不限制暴露子项
+    //     mod a1 {
+    //         pub mod a2 {
+    //             pub const J: i32 = 3;
+    //         }
+    //     }
+    //     // 使用 pub(in mod) 形式可以限制项的可见范围
+    //     mod b1 {
+    //         pub(in crate::a) mod b2 {
+    //             pub(in crate::a) const J: i32 = 4;
+    //         }
+    //     }
+    //     // 子模块的项对父模块来说是透明的（不可见的）
+    //     mod c1 {
+    //         mod c2 {
+    //             const J: i32 = 5;
+    //         }
+    //     }
+    // }
 }
