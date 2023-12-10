@@ -207,3 +207,44 @@ pub mod a {
 - a 模块使用 pub 不限制对外暴露子项 `a1`
 - b 模块使用 pub(in mod) 限制子项 `b2`` 的可见范围
 - c 模块中 `c2` 是私有模块，`calc` 函数无法调用 `c2` `J` 项，这是因为 c2 和 J 不对外暴露，父模块不能读取，不能解析这两个项。
+
+
+### code
+```rs
+fn main {
+    let secret_number = rand::thread_rng().gen_range(1..10);
+
+    // 在lib.rs中，添加以下代码
+    // pub mod a {
+    //     pub const I: i32 = 3;
+    //     fn calc(x: i32) -> i32 {
+    //         use self::a1::a2::J as AJ;
+    //         use self::b1::b2::J as BJ;
+    //         // use self::c1::c2::J as CJ; c2和J不对外暴露，父模块不能读取，无法解析这个项
+    //         x + BJ
+    //     }
+
+    //     pub fn bar(z: i32) -> i32 {
+    //         calc(I) * z
+    //     }
+    //     // 使用 pub 形式不限制暴露子项
+    //     mod a1 {
+    //         pub mod a2 {
+    //             pub const J: i32 = 3;
+    //         }
+    //     }
+    //     // 使用 pub(in mod) 形式可以限制项的可见范围
+    //     mod b1 {
+    //         pub(in crate::a) mod b2 {
+    //             pub(in crate::a) const J: i32 = 4;
+    //         }
+    //     }
+    //     // 子模块的项对父模块来说是透明的（不可见的）
+    //     mod c1 {
+    //         mod c2 {
+    //             const J: i32 = 5;
+    //         }
+    //     }
+    // }
+}
+```
