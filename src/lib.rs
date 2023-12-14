@@ -7,6 +7,14 @@ mod back_of_house;
 
 fn cleanTable() {}
 
+/**
+ * # Example
+ * eat_at_restaurant
+ * ```rs
+ * let a = 1;
+ * println!("{}", a);
+ * ```
+ */
 pub fn eat_at_restaurant() {
     // 绝对路径使用模块（方法）
     crate::front_of_house::hosting::add_to_waitlist();
@@ -17,3 +25,11 @@ pub fn eat_at_restaurant() {
     // use相对路径导入并使用模块（方法）
     serving::take_payment();
 }
+
+/**
+```
+let a = 1;
+println!("{}", a);
+```
+*/
+pub fn test() {}
