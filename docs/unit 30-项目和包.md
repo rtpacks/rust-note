@@ -47,7 +47,7 @@ error: a bin target must be available for `cargo run`
 ```
 
 原因是库类型的项目 Package 只能作为三方库被其它项目引用，不能独立运行，只有之前的二进制项目 Package 才可以运行。
-与 `src/main.rs` 类似，Cargo 的惯例：如果一个项目 Package 包含有 src/lib.rs，意味**它包含有一个库类型的包 Crate**，该库类型包的报名与所属的库类型 Package 相同，在这里是 my-lib，该包的根文件是 src/lib.rs。
+与 `src/main.rs` 类似，Cargo 的惯例：如果一个项目 Package 包含有 src/lib.rs，意味**它包含有一个库类型的包 Crate**，该库类型包的包名与所属的库类型 Package 相同，在这里是 my-lib，该包的根文件是 src/lib.rs。
 
 #### 3. 易混淆的 Package 和包
 
