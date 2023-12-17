@@ -45,24 +45,84 @@ fn main() {
      * - Safety：如果函数使用 unsafe 代码，那么调用者就需要注意一些使用条件，以确保 unsafe 代码块的正常工作
      *
      * ### 5. 文档测试(Doc Test)
+     * 文档注释和包模块注释除了支持生成文档外，还支持文档测试，也就是文档注释和包模块注释不仅可以生成文档，还可以作为单元测试的用例运行，使用 cargo test 运行测试。
      *
+     * 在注释中尽量使用 **完整路径** 来调用函数，因为测试是在另外一个独立的线程中运行的，在 lib.rs 中加入：
+     *
+     * ```rs
+     * pub mod compute {
+     *     /// `add_one` 将指定值加1
+     *     ///
+     *     /// # Examples11
+     *     ///
+     *     /// ```rust
+     *     /// let arg = 3;
+     *     /// let answer = ilearn::compute::add_one(arg);
+     *     ///
+     *     /// assert_eq!(6, answer);
+     *     /// ```
+     *     pub fn add_one(x: i32) -> i32 {
+     *         let a = 3;
+     *         x + a
+     *     }
+     * }
+     * ```
+     * 可以看到，文档中的测试用例被完美运行，而且输出中也明确提示了 Doc-tests world_hello，意味着这些测试的名字叫 Doc test 文档测试。
+     * 在测试过程中，可能调用函数的函数发生panic，导致测试用例无法继续执行，如果想要通过这种测试，可以添加 should_panic，通过 should_panic，告诉 Rust 这个用例可能会导致 panic，这样测试用例就能顺利通过：
+     * ```rust
+     * /// ```rust,should_panic
+     * /// let arg = 1;
+     * /// let answer = ilearn::compute::add_two(arg);
+     * /// ```
+     *  pub fn add_two(x: i32) -> i32 {
+     *      if x == 1 {
+     *          panic!("x 不能等于 1");
+     *      }
+     *      let a = 3;
+     *      x + a
+     *  }
+     * ```
+     *
+     * 注意：文档注释和包模块注释都需要在 `src/lib.rs` 即库类型的 crate 中使用。
+     *
+     * ### 6. 总结
+     * 注释分为三类：代码注释，文档注释，包和模块注释，这三类各自又能分为行注释和块注释。其中文档注释和包模块注释能够使用 `cargo doc` 生成文档便于使用者阅读。
+     * 同时，文档注释和包模块注释支持文档测试，也就是文档注释和包模块注释不仅可以生成文档，还可以作为单元测试的用例运行，使用 cargo test 运行测试。
+     *
+     * ```rs
+     * pub mod compute {
+     *     /// `add_one` 将指定值加1
+     *     ///
+     *     /// # Examples11
+     *     ///
+     *     /// ```rust
+     *     /// let arg = 3;
+     *     /// let answer = ilearn::compute::add_one(arg);
+     *     ///
+     *     /// assert_eq!(6, answer);
+     *     /// ```
+     *     pub fn add_one(x: i32) -> i32 {
+     *         let a = 3;
+     *         x + a
+     *     }
+     * }
+     * ```
      */
 
-    /// # Example
-    /// 这是一段运行的例子
-    /// ```rs
-    /// let arg = 5;
+    /// `add_one` 将指定值加1
+    ///
+    /// # Examples11
+    ///
+    /// ```rust
+    /// let arg = 3;
+    /// let answer = crate::compute::add_one(arg);
+    ///
+    /// assert_eq!(6, answer);
     /// ```
-    let a = 1;
-
-    /** `add_two` 将指定值加2
-     ```
-    let arg = 5;
-    let answer = my_crate::add_two(arg);
-    assert_eq!(7, answer);
-    ```
-    */
-    pub fn add_two(x: i32) -> i32 {
-        x + 2
+    mod compute {
+        fn add_one(x: i32) -> i32 {
+            let a = 3;
+            x + a
+        }
     }
 }
