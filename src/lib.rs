@@ -26,10 +26,31 @@ pub fn eat_at_restaurant() {
     serving::take_payment();
 }
 
-/**
-```
-let a = 1;
-println!("{}", a);
-```
-*/
-pub fn test() {}
+pub mod compute {
+    /// `add_one` 将指定值加1
+    ///
+    /// # Examples11
+    ///
+    /// ```rust
+    /// let arg = 3;
+    /// let answer = ilearn::compute::add_one(arg);
+    ///
+    /// assert_eq!(6, answer);
+    /// ```
+    pub fn add_one(x: i32) -> i32 {
+        let a = 3;
+        x + a
+    }
+
+    /// ```rust,should_panic
+    /// let arg = 1;
+    /// let answer = ilearn::compute::add_two(arg);
+    /// ```
+    pub fn add_two(x: i32) -> i32 {
+        if x == 1 {
+            panic!("x 不能等于 1");
+        }
+        let a = 3;
+        x + a
+    }
+}
