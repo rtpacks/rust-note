@@ -47,6 +47,8 @@ fn main() {
      * ### 5. 文档测试(Doc Test)
      * 文档注释和包模块注释除了支持生成文档外，还支持文档测试，也就是文档注释和包模块注释不仅可以生成文档，还可以作为单元测试的用例运行，使用 cargo test 运行测试。
      *
+     * 注意：文档注释和包模块注释都需要在 `src/lib.rs` 即库类型的 crate 中使用。
+     *
      * 在注释中尽量使用 **完整路径** 来调用函数，因为测试是在另外一个独立的线程中运行的，在 lib.rs 中加入：
      *
      * ```rs
@@ -83,9 +85,52 @@ fn main() {
      *  }
      * ```
      *
-     * 注意：文档注释和包模块注释都需要在 `src/lib.rs` 即库类型的 crate 中使用。
+     * #### 保留测试，隐藏文档
+     * 希望保留文档测试的功能，但是又要将某些测试用例的内容从文档中隐藏起来，使用 `#` 就能达到效果。
+     * 使用 # 开头的行会在文档中被隐藏起来，但是依然会在文档测试中运行：
+     * ```rust
+     * pub mod compute {
+     *     /// `add_one` 将指定值加1
+     *     ///
+     *     /// # Examples11
+     *     ///
+     *     /// ```rust
+     *     /// let arg = 3;
+     *     /// let answer = ilearn::compute::add_one(arg);
+     *     /// # let answer2 = ilearn::compute::add_one(5);
+     *     /// assert_eq!(6, answer);
+     *     /// ```
+     *     pub fn add_one(x: i32) -> i32 {
+     *         let a = 3;
+     *         x + a
+     *     }
+     * }
+     * ```
      *
-     * ### 6. 总结
+     * ### 6. 文档注释的代码跳转
+     * 注释可以生成文档，可以编写测试用例，rust的注释还支持代码跳转，使用 `[\`\`]` 表示可跳转，跳转支持标准库、指定完整路径、指定类型多种方式：
+     * ```rust
+     * /// 直接指定跳转标准库：`add_one` 返回一个[`Option`]类型
+     * /// 使用完整路径跳转：[`crate::MySpecialFormatter`]
+     * /// 使用完整路径跳转：[`crate::MySpecialFormatter`]
+     * /// 跳转到结构体  [`Foo`](struct@Foo)
+     * /// 跳转到同名函数 [`Foo`](fn@Foo)
+     * /// 跳转到同名宏 [`foo!`]
+     * pub fn add_one(x: i32) -> Option<i32> {
+     *     Some(x + 1)
+     * }
+     * pub struct MySpecialFormatter;
+     * pub struct Bar;
+     * pub struct Foo {}
+     * pub fn Foo() {}
+     *
+     * #[macro_export]
+     * macro_rules! foo {
+     *   () => {}
+     * }
+     * ```
+     *
+     * ### 7. 总结
      * 注释分为三类：代码注释，文档注释，包和模块注释，这三类各自又能分为行注释和块注释。其中文档注释和包模块注释能够使用 `cargo doc` 生成文档便于使用者阅读。
      * 同时，文档注释和包模块注释支持文档测试，也就是文档注释和包模块注释不仅可以生成文档，还可以作为单元测试的用例运行，使用 cargo test 运行测试。
      *
@@ -124,5 +169,24 @@ fn main() {
             let a = 3;
             x + a
         }
+    }
+
+    /// 直接指定跳转标准库：`add_one` 返回一个[`Option`]类型
+    /// 使用完整路径跳转：[`ilearn::MySpecialFormatter`]
+    /// 使用完整路径跳转：[`crate::MySpecialFormatter`]
+    /// 跳转到结构体  [`Foo`](struct@Foo)
+    /// 跳转到同名函数 [`Foo`](fn@Foo)
+    /// 跳转到同名宏 [`foo!`]
+    pub fn add_one(x: i32) -> Option<i32> {
+        Some(x + 1)
+    }
+    pub struct MySpecialFormatter;
+    pub struct Bar;
+    pub struct Foo {}
+    pub fn Foo() {}
+
+    #[macro_export]
+    macro_rules! foo {
+        () => {};
     }
 }
