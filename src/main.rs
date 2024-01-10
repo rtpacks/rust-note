@@ -1,241 +1,54 @@
-use rand::Rng;
+use std::{env, fs};
 
 fn main() {
     /*
-     * ## 格式化与输出
-     * ### 1. print!，println!，format!，eprint!，eprintln!
-     * - print! 将格式化文本输出到标准输出，不带换行符
-     * - println! 同上，但是在行的末尾添加换行符
-     * - format! 将格式化文本输出到 String 字符串
-     * - eprint!，eprintln! 仅应该被用于输出错误信息和进度信息，其它场景都应该使用 print! 系列
      *
-     * ### 2. `{}` 与 `{:?}`
-     * 与 `{}` 类似，`{:?}` 也是占位符：
-     * - {} 适用于实现了 `std::fmt::Display` 特征的类型，用来以更优雅、更友好的方式格式化文本，例如展示给用户
-     * - `{:?}` 适用于实现了 `std::fmt::Debug` 特征的类型，用于调试场景
-     * - 其实两者的选择很简单，当你在写代码需要调试时，使用 `{:?}`，剩下的场景，选择 `{}`。
+     * ## Minigrep
+     * https://course.rs/basic-practice/base-features.html
      *
-     * #### 1. Debug 特征
+     * 在cargo的命令行运行中，`--` 是给调用的程序使用的，而 `--` 前的参数是给cargo使用的。Rust的命令行参数可以通过 `env::args()` 方法来获取：
      *
-     * 大多数 Rust 类型都实现了 Debug 特征或者支持派生该特征，对于数值、字符串、数组，可以直接使用 {:?} 进行输出，但是对于结构体，需要派生Debug特征后，才能进行输出，总之很简单。
+     * 首先通过 use 引入标准库中的 env 包，然后 env::args 方法会读取并分析传入的命令行参数，最终通过 collect 方法输出一个集合类型 Vector。
+     * > env::args 读取到的参数集合中第一个是程序的可执行的路径名
      * ```rust
-     * let i = 3.1415926;
-     * let s = String::from("hello");
-     * let v = vec![1, 2, 3];
-     * println!("{:?}, {:?}, {:?}", i, s, v, );
-     * ```
-     * #### 2. Display 特征
-     * 与大部分类型实现了 Debug 不同，实现了 Display 特征的 Rust 类型并没有那么多，往往需要自定义想要的格式化方式，没有实现 Display 特征就直接使用 `{}` 格式化输出，代码不会通过编译：
-     * ```rust
-     * let s = String::from("hello");
-     * let v = vec![1, 2, 3];
-     * println!("{}, {}, {}, {}", s, v); // 不会通过编译
-     * ```
-     * 如果希望打印复杂类型，可以有其他方法：
-     * - 使用 {:?} 或 {:#?}，{:#?} 与 {:?} 几乎一样，唯一的区别在于 `{:#?}` 能更优美地输出内容
-     * - 为自定义类型实现 Display 特征
-     * - 使用 newtype 为外部类型实现 Display 特征
-     *
-     * ##### 自定义类型实现 Display 特征
-     * 如果需要被格式化输出的类型是定义在当前作用域中的，那么可以为其直接实现 Display 特征。只要实现 Display 特征中的 fmt 方法，即可为自定义结构体 Person 添加自定义输出
-     * ```rust
-     * use std::fmt;
-     *
-     * struct Person {
-     *     name: String,
-     *     age: u8,
-     * }
-     * impl fmt::Display for Person {
-     *     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-     *         write!(f, "姓名{}，年龄{}", self.name, self.age)
-     *     }
-     * }
+     * use std::env;
      * fn main() {
-     *     let p = Person {
-     *         name: "sunface".to_string(),
-     *         age: 18,
-     *     };
-     *     println!("{}", p);
+     *     let args: Vec<String> = env::args().collect();
+     *     dbg!(args);
      * }
      * ```
+     * **用户的输入不可信**，例如用户输入非 Unicode 字符时，当前程序会直接崩溃。
+     * 原因是当传入的命令行参数包含非 Unicode 字符时， `std::env::args 会直接崩溃。
+     * 如果有这种特殊需求，建议大家使用 std::env::args_os，该方法产生的数组将包含 OsString 类型，而不是之前的 String 类型，前者对于非 Unicode 字符会有更好的处理。
      *
-     * ##### 为外部类型实现 Display 特征
-     * 在 Rust 中，**无法直接为外部类型实现外部特征** ，但是可以使用 newtype 解决此问题，将一个当前作用域的新类型包裹想要格式化输出的外部类型，最后只要为新类型实现 Display 特征，即可进行格式化输出：
+     * 两个选择：
+     * 1. 用户爱输入啥输入啥，崩溃了知道自己错了
+     * 2. args_os 会引入额外的跨平台复杂性
+     *
+     * ### 读取文件
      * ```rust
-     * struct Array(Vec<i32>);
-     * use std::fmt;
-     * impl fmt::Display for Array {
-     *     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-     *         write!(f, "数组是：{:?}", self.0)
-     *     }
+     * use std::fs;
+     * fn main {
+     *      let args: Vec<String> = env::args().collect();
+     *      let contents = fs::read_to_string(args[1]).expect("Should have been able to read the file.");
+     *      println!("The contents: \n${contents}");
      * }
-     * fn main() {
-     *     let arr = Array(vec![1, 2, 3]);
-     *     println!("{}", arr);
-     * }
      * ```
-     *
-     * ### 3. 参数
-     *
-     * #### 1. 位置参数
-     * 除了按照顺序替换占位符外，还能指定参数位置，索引从0开始。`println!("{1}{0}", 1, 2); // =>"21"`
-     *
-     * #### 2. 具名参数
-     * 除了指定参数位置，还可以直接在占位符中使用参数名称，需要注意的是：带名称的参数必须放在不带名称参数的后面。`println!("{name} {}", 1, name = 2); // => "2 1"`
-     *
-     * #### 3. 格式化参数
-     * rust为格式化提供许多有用的工具，如只保留两位小数点，宽度补齐等。
-     * > 格式化基础数据类型，Display 和 Debug 两种特征并没有区别，所以使用 `{}` 还是 `{:?}` 没有任何影响。
-     *
-     * **保留两位小数**
-     * ```rust
-     * let v = 3.1415926;
-     * // Display 特征 => 3.14
-     * println!("{:.2}", v);
-     * // Debug => 3.14
-     * println!("{:.2?}", v);
+     * ```shell
+     * cargo run -- D:\workspace\Rust\rust-note\README.md
      * ```
-     *
-     * ##### 字符串填充
-     * 在填充字符串时，如果需要指定填充的长度，可以使用 `$` 表示 `{}` 中使用参数，可以是位置参数也可以是具名参数。
-     * 如果在 `{:x}` 中没有使用 `$`，直接写字符，表示和变量的值直接拼接并输出，如 `{:+}` 表示和变量 x 默认拼接成 `+x` 形式。
-     *
-     * **字符串填充默认使用空格，并且默认是左对齐。**
-     *
-     * ```rust
-     * println!("Hello {:5}!", "x"); // 指定5位长度
-     * println!("Hello {:1$}!", "x", 5); // $ 表示 `{}` 中使用参数，`1` 表示使用第二个参数作为长度
-     * println!("Hello {1:0$}!", 5, "x"); // $ 表示 `{}` 中使用参数，`1` 表示使用第二个参数作为输出变量，`0` 表示使用第一个参数作为长度
-     * println!("Hello {:width$}!", "x", width = 5); // $ 表示 `{}` 中使用参数，`width` 表示使用具名参数
-     * println!("Hello {:1$}!{}", "x", 5); // $ 表示 `{}` 中使用参数，`1` 表示使用第二个参数作为长度，同时 `{}` 输出第二个参数
-     * println!("Hello {:05}!", 'x'); // 字符串默认用空格填充，如果需要其他字符，需要用对齐方式实现
-     * ```
-     *
-     * ##### 数字填充
-     * 数字格式化默认也是使用空格进行填充，但与字符串左对齐不同的是，数字默认是右对齐。
-     * 数字类型默认支持用数字填充，如果需要其他非数字字符，需要用对齐方式实现。
-     * 数字填充，如 `{:012}` 第一位表示填充数字，接下来表示总长度，如果被格式化的数字是负数，符号也要占一位长度。
-     * ```rust
-     * println!("Hello {:5}!", 5); // 宽度是5 => Hello     5!
-     * println!("Hello {:+}!", 5); // 显式的输出正号 => Hello +5!
-     * println!("Hello {:05}!", 5); // 宽度5，使用0进行填充 => Hello 00005!
-     * println!("Hello {:05}!", -5); // 负号也要占用一位宽度 => Hello -0005!
-     * println!("Hello {:05}!", 5); // 数字类型默认支持用数字填充，如果需要其他非数字字符，需要用对齐方式实现
-     * ```
-     *
-     * ##### 对齐
-     * 如果需要指定填充字符，需要使用对齐功能。
-     * ```rust
-     * println!("Hello {:<5}!", "x"); // 左对齐 => Hello x    !
-     * println!("Hello {:>5}!", "x"); // 右对齐 => Hello     x!
-     * println!("Hello {:^5}!", "x"); // 居中对齐 => Hello   x  !
-     * println!("Hello {:&<5}!", "x"); // 对齐并使用指定符号填充 => Hello x&&&&!。指定符号填充的前提条件是必须有对齐字符
-     * println!("Hello {:1<5}!", "x"); // 对齐并使用指定符号填充 => Hello x1111!。指定符号填充的前提条件是必须有对齐字符
-     * println!("Hello {:1<5}!", "x"); // 字符串格式化对齐，左对齐，用1填充总共五位数
-     * println!("Hello {:1>5}!", "x"); // 字符串格式化对齐，右对齐，用1填充总共五位数
-     * println!("Hello {:1^5}!", "x"); // 字符串格式化对齐，居中对齐，用1填充总共五位数
-     * println!("Hello {:x<5}!", 1); // 数字格式化对齐，左对齐，用x填充总共五位数
-     * println!("Hello {:x>5}!", 1); // 数字格式化对齐，右对齐，用x填充总共五位数
-     * println!("Hello {:x^5}!", 1); // 数字格式化对齐，居中对齐，用x填充总共五位数
-     * ```
-     *
-     * ##### 精度
-     * 精度可以用于控制浮点数的精度或者字符串的长度。
-     * ```rust
-     * let v = 3.1415926;
-     * println!("{:.2}", v); // 保留小数点后两位 => 3.14
-     * println!("{:+.2}", v); // 带符号保留小数点后两位 => +3.14
-     * println!("{:.0}", v); // 不带小数 => 3
-     * println!("{:.1$}", v, 4); // 通过参数来设定精度 => 3.1416，相当于{:.4}
-     *
-     * let s = "hirust";
-     * println!("Hello {:.3}", s); // 保留字符串前三个字符 => Hello hir
-     * println!("Hello {:.*}!", 3, "abcdefg"); // {:.*}接收两个参数，第一个是精度，第二个是被格式化的值 => Hello abc!
-     * ```
-     *
-     * ##### 进制
-     * 可以使用 `#` 号来控制数字的进制输出。
-     * ```rust
-     * println!("{:#b}!", 27); // 二进制 => 0b11011!
-     * println!("{:#o}!", 27); // 八进制 => 0o33!
-     * println!("{}!", 27); // 十进制 => 27!
-     * println!("{:#x}!", 27); // 小写十六进制 => 0x1b!
-     * println!("{:#X}!", 27); // 大写十六进制 => 0x1B!
-     * println!("{:x}!", 27); // 不带前缀的十六进制 => 1b!
-     * println!("{:#010b}!", 27); // 使用0填充二进制，宽度为10 => 0b00011011!
-     * ```
-     *
-     * ##### 指数
-     * ```rust
-     * println!("{:2e}", 1000000000); // => 1e9
-     * println!("{:2E}", 1000000000); // => 1E9
-     * ```
-     *
-     * ##### 指针
-     * ```rust
-     * let v= vec![1, 2, 3];
-     * println!("{:p}", v.as_ptr()) // => 0x600002324050
-     * ```
-     *
-     * ##### 转义
-     * 有时需要输出 {和}，但这两个字符是特殊字符，需要进行转义。
-     * ```rust
-     * // "{{" 转义为 '{'   "}}" 转义为 '}'   "\"" 转义为 '"'
-     * * println!(" Hello \"{{World}}\" "); // => Hello "{World}"
-     * ```
-     *
-     * ### 4. 在格式化字符串时捕获环境中的值
-     * 在格式化参数时，会发现除了占位符 `{}` 外，还需要额外的变量：`println!("{}", a)` 显得比较麻烦，因此在rust 1.58 版本中，结合具名参数和占位符，支持在占位符中直接捕获环境中的值。
-     * ```rust
-     * let name = "zs";
-     * let score = 100.123;
-     * let precision = 2;
-     * println!("{name} : {score:x<width$.precision$}", width = 11);
-     * ```
-     * 
-     * 把格式化都牢记在脑中是不太现实的，要做的就是知道 Rust 支持相应的格式化输出，在需要之时查阅文档即可。
      */
 
-    #[derive(Debug)]
-    struct Person {
-        name: String,
-        age: u8,
-    }
+    println!("Hello, world!");
 
-    let i = 3.1415926;
-    let s = String::from("hello");
-    let v = vec![1, 2, 3];
-    let p = Person {
-        name: "sunface".to_string(),
-        age: 18,
-    };
-    println!("{:?}, {:?}, {:?}, {:?}", i, s, v, p);
+    // 通过类型注释，Rust编译器会将collect方法读取成指定类型
+    let args: Vec<String> = env::args().collect();
 
-    println!("Hello {:1$}!", "x", 5);
+    // 实现Debug特征，使用 `{:?}` 输出
+    // cargo run -- Hello, Minigrep
+    println!("{:?}", args); // => ["projectpath", "Hello", "Minigrep"]
 
-    // 字符串默认用空格填充，如果需要其他字符，需要用对齐方式实现
-    println!("Hello {:05}!", 'x');
-    // 数字类型默认支持用数字填充，如果需要其他非数字字符，需要用对齐方式实现
-    println!("Hello {:05}!", 5);
+    let contents = fs::read_to_string(args[1].clone()).expect("Should have been able to read the file.");
 
-    // 字符串格式化对齐，左对齐，用1填充总共五位数
-    println!("Hello {:1<5}!", "x");
-    // 字符串格式化对齐，右对齐，用1填充总共五位数
-    println!("Hello {:1>5}!", "x");
-    // 字符串格式化对齐，居中对齐，用1填充总共五位数
-    println!("Hello {:1^5}!", "x");
-    // 数字格式化对齐，左对齐，用x填充总共五位数
-    println!("Hello {:x<5}!", 1);
-    // 数字格式化对齐，右对齐，用x填充总共五位数
-    println!("Hello {:x>5}!", 1);
-    // 数字格式化对齐，居中对齐，用x填充总共五位数
-    println!("Hello {:x^5}!", 1);
-
-    println!("{:#010b}!", 27); // 使用0填充二进制，宽度为10 => 0b00011011!
-
-    // 从rust1.58开始，支持捕获环境中的变量
-    let name = "zs";
-    let score = 100.123;
-    let precision = 2;
-    println!("{name}: {score:x<width$.precision$}", width = 11);
+    println!("The contents: \n{contents}");
 }
