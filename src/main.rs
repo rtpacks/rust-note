@@ -26,16 +26,21 @@ fn main() {
      * 2. args_os 会引入额外的跨平台复杂性
      *
      * ### 读取文件
+     * 在 `minigrep` 程序中，不建议使用 `args[1]` `args[2]` 形式来使用，需要用到变量来存储读取的文件路径和带搜索的字符串。
+     * 
      * ```rust
      * use std::fs;
      * fn main {
      *      let args: Vec<String> = env::args().collect();
-     *      let contents = fs::read_to_string(args[1]).expect("Should have been able to read the file.");
+     *      let file_path = args[1].clone();
+     *      let contents = fs::read_to_string(file_path).expect("Should have been able to read the file.");
      *      println!("The contents: \n${contents}");
      * }
      * ```
+     * 
      * ```shell
      * cargo run -- D:\workspace\Rust\rust-note\README.md
+     * cargo run -- D:\workspace\Rust\rust-note\public\poem.txt
      * ```
      */
 
