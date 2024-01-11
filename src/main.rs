@@ -27,7 +27,7 @@ fn main() {
      *
      * ### 读取文件
      * 在 `minigrep` 程序中，不建议使用 `args[1]` `args[2]` 形式来使用，需要用到变量来存储读取的文件路径和带搜索的字符串。
-     * 
+     *
      * ```rust
      * use std::fs;
      * fn main {
@@ -37,14 +37,33 @@ fn main() {
      *      println!("The contents: \n${contents}");
      * }
      * ```
-     * 
+     *
      * ```shell
      * cargo run -- D:\workspace\Rust\rust-note\README.md
      * cargo run -- D:\workspace\Rust\rust-note\public\poem.txt
      * ```
+     *
+     * ### 代码改进
+     * - 单一且庞大的函数。main 函数当前执行两个任务：解析命令行参数和读取文件，需要将大的函数拆分成更小的功能单元。
+     * - 配置变量散乱在各处。独立的变量越多，越是难以维护，需要将这些用于配置的变量整合到一个结构体中。
+     * - 细化错误提示。文件不存在、无权限等等都是可能的错误，一条大一统的消息无法给予用户更多的提示。
+     * - 使用错误而不是异常。需要增加合适的错误处理代码，来给予使用者给详细友善的提示。
+     *
+     * #### 分离 main 函数
+     * 关于如何处理庞大的 main 函数，Rust 社区给出了统一的指导方案:
+     * - 将程序分割为 main.rs 和 lib.rs，并将程序的逻辑代码移动到后者内
+     * - 对部分非常基础的功能，严格来说不算是逻辑代码的一部分，可以放在 main.rs 中
+     *
+     * 重新梳理后可以得出 main 函数应该包含的功能:
+     * - 解析命令行参数
+     * - 初始化其它配置
+     * - 调用 lib.rs 中的 run 函数，以启动逻辑代码的运行
+     * - 如果 run 返回一个错误，需要对该错误进行处理
+     *
+     * 这个方案有一个很优雅的名字: 关注点分离 (Separation of Concerns)。简而言之，main.rs 负责启动程序，lib.rs 负责逻辑代码的运行。
+     * 从测试的角度而言，这种分离也非常合理： lib.rs 中的主体逻辑代码可以得到简单且充分的测试，至于 main.rs ？确实没办法针对其编写额外的测试代码，但由于它的代码也很少，容易保证它的正确性。
+     *
      */
-
-    println!("Hello, world!");
 
     // 通过类型注释，Rust编译器会将collect方法读取成指定类型
     let args: Vec<String> = env::args().collect();
@@ -53,7 +72,8 @@ fn main() {
     // cargo run -- Hello, Minigrep
     println!("{:?}", args); // => ["projectpath", "Hello", "Minigrep"]
 
-    let contents = fs::read_to_string(args[1].clone()).expect("Should have been able to read the file.");
+    let contents =
+        fs::read_to_string(args[1].clone()).expect("Should have been able to read the file.");
 
     println!("The contents: \n{contents}");
 }
