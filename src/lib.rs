@@ -1,3 +1,5 @@
+use std::{error::Error, fs};
+
 use crate::front_of_house::hosting;
 use front_of_house::serving;
 
@@ -87,4 +89,41 @@ pub fn Foo() {}
 #[macro_export]
 macro_rules! foo {
     () => {};
+}
+
+/**
+ * 定义配置数据结构体
+ */
+pub struct Config {
+    query: String,
+    file_path: String,
+}
+
+/**
+ * impl 为 Config 实现自定义的方法
+ */
+impl Config {
+    // 返回Result对象，
+    pub fn build(args: &[String]) -> Result<Config, &'static str> {
+        if args.len() < 3 {
+            return Err("not enough arguments");
+        }
+
+        let file_path = args[1].clone();
+        let query = args[2].clone();
+
+        Ok(Config { file_path, query })
+    }
+}
+
+/**
+ * Box<dyn Error> 动态特征对象，只要实现了某个特征就可以进行类型转换
+ */
+pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
+    let content =
+        fs::read_to_string(config.file_path).expect("Should have been able to read the file.");
+
+    println!("The file content: \n{content}");
+
+    Ok(())
 }
