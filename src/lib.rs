@@ -123,7 +123,61 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let content =
         fs::read_to_string(config.file_path).expect("Should have been able to read the file.");
 
-    println!("The file content: \n{content}");
+    println!("The file content: \n{content}\n");
+    println!("=======================================");
+    println!("The search results: \n");
+
+    for line in search_right(&config.query, &content) {
+        println!("{line}");
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fail_result() {
+        let query = "duct";
+        let contents = "\
+Rust:
+safe, fast, productive.
+Pick three.";
+
+        assert_eq!(vec!["safe, fast, productive."], search(query, contents));
+    }
+
+    #[test]
+    fn right_result() {
+        let query = "duct";
+        let contents = "\
+Rust:
+safe, fast, productive.
+Pick three.";
+
+        assert_eq!(
+            vec!["safe, fast, productive."],
+            search_right(query, contents)
+        );
+    }
+}
+
+/// 增加生命周期提示，让编译器知道在函数调用期间这些引用变量是不会出现问题的
+pub fn search<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+    vec![]
+}
+
+pub fn search_right<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+    let mut results = Vec::new();
+    // 遍历迭代每一行
+    for line in content.lines() {
+        // 判断是否包含指定的query字符串
+        if line.contains(query) {
+            // 存储搜索内容
+            results.push(line)
+        }
+    }
+    results
 }
