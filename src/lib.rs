@@ -1,4 +1,4 @@
-use std::{error::Error, fs};
+use std::{env, error::Error, fs};
 
 use crate::front_of_house::hosting;
 use front_of_house::serving;
@@ -97,6 +97,7 @@ macro_rules! foo {
 pub struct Config {
     query: String,
     file_path: String,
+    ignore_case: bool,
 }
 
 /**
@@ -112,7 +113,14 @@ impl Config {
         let file_path = args[1].clone();
         let query = args[2].clone();
 
-        Ok(Config { file_path, query })
+        // Rust 的 env 包提供了相应的方法读取环境变量
+        let ignore_case = env::var("IGNORE_CASE").is_ok();
+
+        Ok(Config {
+            file_path,
+            query,
+            ignore_case,
+        })
     }
 }
 
@@ -127,7 +135,13 @@ pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
     println!("=======================================");
     println!("The search results: \n");
 
-    for line in search_right(&config.query, &content) {
+    let results = if config.ignore_case {
+        search_case_insensitive_right(&config.query, &content)
+    } else {
+        search_right(&config.query, &content)
+    };
+
+    for line in results {
         println!("{line}");
     }
 
@@ -151,6 +165,17 @@ Pick three.";
 
     #[test]
     fn right_result() {
+        let query = "rust";
+        let contents = "\
+Rust:
+safe, fast, productive.
+Pick three.";
+
+        assert_eq!(vec!["Rust:"], search_right(query, contents));
+    }
+
+    #[test]
+    fn case_fail_result() {
         let query = "duct";
         let contents = "\
 Rust:
@@ -159,7 +184,21 @@ Pick three.";
 
         assert_eq!(
             vec!["safe, fast, productive."],
-            search_right(query, contents)
+            search_case_insensitive_fail(query, contents)
+        );
+    }
+
+    #[test]
+    fn case_right_result() {
+        let query = "rust";
+        let contents = "\
+Rust:
+safe, fast, productive.
+Pick three.";
+
+        assert_eq!(
+            vec!["Rust:"],
+            search_case_insensitive_right(query, contents)
         );
     }
 }
@@ -175,6 +214,29 @@ pub fn search_right<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
     for line in content.lines() {
         // 判断是否包含指定的query字符串
         if line.contains(query) {
+            // 存储搜索内容
+            results.push(line)
+        }
+    }
+    results
+}
+
+/**
+ * 失败用例
+ */
+pub fn search_case_insensitive_fail<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+    vec![]
+}
+
+/**
+ * 成功的用例
+ */
+pub fn search_case_insensitive_right<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+    let mut results = Vec::new();
+    // 遍历迭代每一行
+    for line in content.lines() {
+        // 判断是否包含指定的query字符串
+        if line.to_lowercase().contains(&query.to_lowercase()) {
             // 存储搜索内容
             results.push(line)
         }

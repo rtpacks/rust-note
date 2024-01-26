@@ -5,9 +5,9 @@ fn main() {
     /*
      *
      * ## Minigrep
-     * 测试用例编写
+     * 实现忽略大小写功能
      *
-     * 测试驱动开发模式(TDD, Test Driven Development)：
+     * 再次熟悉测试驱动开发模式：测试驱动开发模式(TDD, Test Driven Development)：
      * - 编写一个注定失败的测试，并且失败的原因和你指定的一样
      * - 编写一个成功的测试，与第三步配合
      * - 编写并优化你的功能逻辑代码（搜索函数功能），直到通过测试
@@ -22,20 +22,22 @@ fn main() {
      * mod tests {
      *     use super::*;
      *
-     *     #[test]
-     *     fn fail_result() {
-     *         let query = "duct";
+     *    fn case_fail_result() {
+     *         let query = "rust";
      *         let contents = "\
      * Rust:
      * safe, fast, productive.
      * Pick three.";
      *
-     *         assert_eq!(vec!["safe, fast, productive."], search_fail(query, contents));
+     *         assert_eq!(
+     *             vec!["Rust:"],
+     *             search_case_insensitive_fail(query, contents)
+     *         );
      *     }
      * }
      *
      * /// 增加生命周期提示，让编译器知道在函数调用期间这些引用变量是不会出现问题的
-     * pub fn search_fail<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+     * pub fn search_case_insensitive_fail<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
      *     vec![]
      * }
      * ```
@@ -47,26 +49,25 @@ fn main() {
      *     use super::*;
      *
      *     #[test]
-     *     fn right_result() {
-     *         let query = "duct";
+     *     fn case_right_result() {
+     *         let query = "rust";
      *         let contents = "\
      * Rust:
      * safe, fast, productive.
      * Pick three.";
      *
      *         assert_eq!(
-     *             vec!["safe, fast, productive."],
-     *             search_right(query, contents)
+     *             vec!["Rust:"],
+     *             search_case_insensitive_right(query, contents)
      *         );
      *     }
-     * }
      *
-     * pub fn search_right<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
+     * pub fn search_case_insensitive_right<'a>(query: &'a str, content: &'a str) -> Vec<&'a str> {
      *     let mut results = Vec::new();
      *     // 遍历迭代每一行
      *     for line in content.lines() {
      *         // 判断是否包含指定的query字符串
-     *         if line.contains(query) {
+     *         if line.to_lowercase().contains(&query.to_lowercase()) {
      *             // 存储搜索内容
      *             results.push(line)
      *         }
@@ -77,29 +78,44 @@ fn main() {
      *
      * ### 3. 优化代码结构
      *
-     * 正确测试用例通过后，优化代码结构，方便外部调用，在run函数中，调用搜索函数并将搜索结构输出：
+     * 正确测试用例通过后，优化代码结构，方便外部调用，在run函数中，调用搜索函数并将搜索结构输出。
+     * 
+     * 这里需要则呢将该配置选项标识是否开启大小写敏感，env 包提供了相应的方法读取环境变量，is_ok 方法是 Result 提供的，用于检查是否有值，有就返回 true，没有则返回 false：
      * ```rust
-     * pub fn run(config: Config) -> Result<(), Box<dyn Error>> {
-     *     let content =
-     *         fs::read_to_string(config.file_path).expect("Should have been able to read the file.");
+     * pub struct Config {
+     *     query: String,
+     *     file_path: String,
+     *     ignore_case: bool,
+     * }
      *
-     *     println!("The file content: \n{content}\n");
-     *     println!("=======================================");
-     *     println!("The search results: \n");
+     * // impl 为 Config 实现自定义的方法
+     * impl Config {
+     *     // 返回Result对象，
+     *     pub fn build(args: &[String]) -> Result<Config, &'static str> {
+     *         if args.len() < 3 {
+     *             return Err("not enough arguments");
+     *         }
      *
-     *     for line in search_right(&config.query, &content) {
-     *         println!("{line}");
+     *         let file_path = args[1].clone();
+     *         let query = args[2].clone();
+     *
+     *         // Rust 的 env 包提供了相应的方法读取环境变量
+     *         let ignore_case = env::var("IGNORE_CASE").is_ok();
+     *
+     *         Ok(Config {
+     *             file_path,
+     *             query,
+     *             ignore_case,
+     *         })
      *     }
-     *
-     *     Ok(())
      * }
      * ```
-     * 
+     *
      * ### 4. 调用功能代码
-     * 
+     *
      * 最后控制台执行整个程序
      * ```shell
-     * cargo run -- D:\workspace\Rust\rust-note\public\poem.txt  body
+     * $env:IGNORE_CASE=1;cargo run -- D:\workspace\Rust\rust-note\public\poem.txt Body
      * ```
      */
 
