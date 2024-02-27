@@ -4,85 +4,50 @@ use std::{env, error::Error, fs, process};
 fn main() {
     /*
      *
-     * ## Minigrep
-     * 一个完整的程序执行日志需要有正确和错误的区分，只用 `println!` 只能实现标准输出，而错误信息更适合输出到标准错误输出(stderr)，`println!` 并不适用。
+     * ## 闭包 Closure
      *
-     * 使用 `cargo run > output.txt` 将日志输出到日志文件。
+     * 闭包是一种匿名函数，它可以赋值给变量也可以作为参数传递给其它函数，不同于函数的是，它允许捕获调用者作用域中的值。
      *
-     * ```txt
-     * // output.txt
-     * Problem parsing arguments: not enough arguments
-     * ```
-     *
-     * ### 标准错误输出 stderr
-     * 将错误信息重定向到 stderr 很简单，只需在打印错误的地方，将 println! 宏替换为 eprintln!，注意此时标准错误输出不会输出到日志文件中。
-     *
+     * Rust 闭包在形式上借鉴了 Smalltalk 和 Ruby 语言，与函数最大的不同就是它的参数是通过 |parm1| 的形式进行声明，如果是多个参数就 |param1, param2,...|，闭包的形式定义：
      * ```rust
-     * fn main() {
-     *     let args: Vec<String> = env::args().collect();
-     *
-     *     let config = Config::build(&args).unwrap_or_else(|err| {
-     *         eprintln!("Problem parsing arguments: {err}");
-     *         process::exit(1);
-     *     });
-     *
-     *     if let Err(e) = minigrep::run(config) {
-     *         eprintln!("Application error: {e}");
-     *         process::exit(1);
-     *     }
+     * |param1, param2,...| {
+     *     语句1;
+     *     语句2;
+     *     返回表达式
      * }
      * ```
      *
-     * 错误输出，`eprintln!` 写入到标准错误输出中，默认还是输出在控制台中。
-     * ```shell
-     * cargo run > output.txt
-     * ```
-     * 
-     * 正常输出，`println!` 写入到标准输出中
-     * 
-     * ```shell
-     * cargo run -- ./public/poem.txt to > output.txt
-     * ```
-     * 
-     * ```txt
-     * The file content:
-     * Searching for the
-     * In file poem.txt
-     * With text:
-     * I'm nobody! Who are you?
-     * Are you nobody, too?
-     * Then there's a pair of us - don't tell!
-     * They'd banish us, you know.
+     * 如果闭包只有一个返回表达式，可以简化定义：
      *
-     * How dreary to be somebody!
-     * How public, like a frog
-     * To tell your name the livelong day
-     * To an admiring bog!
-     *
-     * =======================================
-     * The search results:
-     *
-     * Are you nobody, too?
-     * How dreary to be somebody!
+     * ```rust
+     * |param1| 返回表达式
      * ```
      *
+     * 特别注意：闭包中最后一行表达式返回的值，就是闭包执行后的返回值。
+     *
+     * ```rust
+     * fn main() {
+     *    let x = 1;
+     *    let sum = |y| x + y;
+     *
+     *    assert_eq!(3, sum(2));
+     * }
+     * ```
+     * 代码中闭包 sum，它拥有一个入参 y，同时捕获了作用域中的 x 的值，因此调用 sum(2) 意味着将 2（参数 y）跟 1（x）进行相加，最终返回它们的和：3。
+     *
+     * 可以看到 sum 非常符合闭包的定义：可以赋值给变量，允许捕获调用者作用域中的值。
+     *
+     * ### 闭包类型推导
+     * Rust 是静态语言，因此所有的变量都具有类型，但是得益于编译器的强大类型推导能力，在很多时候我们并不需要显式地去声明类型，但是显然函数并不在此列，必须手动为函数的所有参数和返回值指定类型，原因在于函数往往会作为 API 提供给你的用户，因此你的用户必须在使用时知道传入参数的类型和返回值类型。
+     *
+     * 与函数相反，闭包并不会作为 API 对外提供，因此它可以享受编译器的类型推导能力，无需标注参数和返回值的类型。
+     *
+     * 为了增加代码可读性，有时候我们会显式地给类型进行标注，出于同样的目的，也可以给闭包标注类型，在下面sum函数中，定义两个参数 `x y` 和返回值为 i32 类型。
+     * ```rust
+     * let sum = |x: i32, y: i32| -> i32 {
+     *     x + y
+     * }
+     * ```
+     * 与之相比，不标注类型的闭包声明会更简洁些：let sum = |x, y| x + y，需要注意的是，针对 sum 闭包，如果你只进行了声明，但是没有使用，编译器会提示你为 x, y 添加类型标注，因为它缺乏必要的上下文：
      */
-
-    // 通过类型注释，Rust编译器会将collect方法读取成指定类型
-    let args: Vec<String> = env::args().collect();
-    // 解构结构体，用unwrap取出Ok的内容，或者在闭包中拿到err错误信息
-    let config: Config = Config::build(&args).unwrap_or_else(|err| {
-        // 闭包读取err错误信息
-        eprintln!("Problem parsing arguments: {err}");
-        process::exit(1);
-    });
-
-    /*
-     *
-     * if let 的使用让代码变得更简洁，可读性也更加好，原因是程序并不关注 run 返回的 Ok 值，只需要用 if let 去匹配是否存在错误即可。
-     */
-    if let Err(e) = run(config) {
-        eprintln!("Application error: {e}");
-        process::exit(1);
-    }
 }
