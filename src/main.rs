@@ -124,6 +124,38 @@ fn main() {
      * call_with_different_values();
      * ```
      *
+     * ### 捕获作用域中的值
+     * 前面提到过，闭包相比较函数多出来的一个功能就是能够访问作用域中的值：
+     *
+     * x 并不是闭包 equal_to_x 的参数，但是它依然可以去使用 x，因为 equal_to_x 在 x 的作用域范围内。
+     * 而对于函数来说，就算你把函数定义在 main 函数体中，它也不能访问 x。
+     * ```rust
+     * fn main() {
+     *     let x = 4;
+     *     let equal_to_x = |z| z == x;
+     *     let y = 4;
+     *     assert!(equal_to_x(y));
+     *
+     * // fn equal_to_x(z: i32) -> bool {
+     * //    z == x
+     * // }
+     * // assert!(equal_to_x(y));
+     * }
+     * ```
+     *
+     * > 函数的表示很简单，它是一段编译之后就不会变化的代码段，我们可以用一个简单的地址就能代表它。
+     * > 而闭包则不一样，存放了什么数据、存放的数据类型是什么、数据存放在哪里、存放的数据是否可以修改、其生命周期如何，这些都是需要考虑的事情。
+     * > 所以在区分闭包和函数这点上，动态语言JavaScript可以做到统一函数和闭包，因为只有在执行时才确定数据。
+     * > https://www.zhihu.com/question/628166233
+     *
+     * ### 闭包对内存的影响
+     * 当闭包从环境中捕获一个值时，会分配内存去存储这些值。对于有些场景来说，这种额外的内存分配会成为一种负担。
+     * 与之相比，函数就不会去捕获这些环境值，因此定义和使用函数不会拥有这种内存负担。
+     *
+     * ### 三种 Fn 特征
+     * 闭包捕获变量有三种途径，恰好对应函数参数的三种传入方式：转移所有权、可变借用、不可变借用，因此相应的 Fn 特征也有三种：
+     * 1. FnOnce，该类型的闭包会拿走被捕获变量的所有权。Once 顾名思义，说明该闭包只能运行一次。
+     * 2. 
      *
      *
      */
@@ -165,7 +197,6 @@ fn main() {
         }
     }
 
-    #[test]
     fn call_with_different_values() {
         let mut c = Cacher::new(|a| a);
 
@@ -174,6 +205,10 @@ fn main() {
 
         assert_eq!(v2, 1);
     }
+    call_with_different_values();
 
-    // call_with_different_values()
+    let x = 4;
+    let closure_to = |z| z == x; // 访问作用域中的变量
+    let y = 4;
+    assert!(closure_to(y));
 }
