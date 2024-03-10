@@ -154,9 +154,40 @@ fn main() {
      *
      * ### 三种 Fn 特征
      * 闭包捕获变量有三种途径，恰好对应函数参数的三种传入方式：转移所有权、可变借用、不可变借用，因此相应的 Fn 特征也有三种：
-     * 1. FnOnce，该类型的闭包会拿走被捕获变量的所有权。Once 顾名思义，说明该闭包只能运行一次。
-     * 2. 
+     * 1. FnOnce，该类型的闭包会拿走**被捕获变量的所有权**，因此该闭包只能运行一次，这也是Once的来源。
+     * ```rust
+     * fn fn_once<F>(func: F)
+     * where
+     *     F: FnOnce(usize) -> bool,
+     * {
+     *     println!("{}", func(3));
+     *     println!("{}", func(4));
+     * }
      *
+     * let x = vec![1, 2, 3];
+     * fn_once(|z| { z == x.len() })
+     * ```
+     * 仅实现 FnOnce 特征的闭包在调用时会转移被捕获变量的所有权，因此不能对闭包进行二次调用（内部被捕获的变量失去所有权，调用会出错）：
+     * ```rust
+     * println!("{}", func(3));
+     * println!("{}", func(4)); // 调用报错，在调用func(3)后，x变量已经失去所有权，再次使用x变量导致出错
+     * ```
+     * 如何解决这个问题呢？只需要给传入的闭包加上Copy特征，闭包就能够对被捕获的变量自动Copy，这样就不存在所有权的问题了。
+     * ```rust
+     * fn fn_once<F>(func: F)
+     * where
+     *     F: FnOnce(usize) -> bool + Copy // 增加Copy Trait，闭包能够对被捕获的变量自动Copy，就不存在所有权的问题了。
+     * {}
+     * ```
+     *
+     * 另外：如果想强制闭包取得捕获变量的所有权，可以在参数列表前添加 move 关键字，这种用法通常用于闭包的生命周期大于捕获变量的生命周期时，例如将闭包返回或移入其他线程。
+     * ```rust
+     * let x = vec![1, 2, 3];
+     * fn_once(move |z| { z == x.len() }); // 强制闭包取得捕获变量的所有权
+     * ```
+     *
+     * 2. FnMut，它以可变借用的方式捕获了环境中的值，因此可以修改该值
+     * 
      *
      */
 
@@ -211,4 +242,15 @@ fn main() {
     let closure_to = |z| z == x; // 访问作用域中的变量
     let y = 4;
     assert!(closure_to(y));
+
+    fn fn_once<F>(func: F)
+    where
+        F: FnOnce(usize) -> bool + Copy,
+    {
+        println!("{}", func(3));
+        println!("{}", func(4));
+    }
+
+    let x = vec![1, 2, 3];
+    fn_once(|z| z == x.len())
 }
