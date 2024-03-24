@@ -20,7 +20,7 @@ fn main() {
      * 闭包捕获变量有三种途径，恰好对应函数参数的三种传入方式：转移所有权、可变借用、不可变借用，因此相应的 Fn 特征也有三种：FnOnce、FnMut、Fn。
      *
      * ### FnOnce
-     * 1. FnOnce，该类型的闭包会拿走**被捕获变量的所有权**，因此该闭包只能运行一次，这也是Once的来源。
+     * FnOnce，该类型的闭包会拿走**被捕获变量的所有权**，因此该闭包只能运行一次，这也是Once的来源。
      * ```rust
      * fn fn_once<F>(func: F)
      * where
@@ -52,7 +52,7 @@ fn main() {
      * fn_once(move |z| { z == x.len() }); // 强制闭包取得捕获变量的所有权
      * ```
      * ### FnMut
-     * 2. FnMut，它以可变借用的方式捕获了环境中的值，因此可以修改该值
+     * FnMut，它以可变借用的方式捕获了环境中的值，因此可以修改该值
      * ```rust
      * let mut s = String::new();
      * let update_string =  |str| s.push_str(str);
@@ -69,36 +69,60 @@ fn main() {
      *
      * 闭包捕获变量的可变借用操作，闭包就会变为FnMut类型，对应的变量也需要设置为可变才能够调用闭包。注意：FnMut是类型。
      * 这种写法有点反直觉，但如果把闭包变量仅仅当成一个普通变量，那么这种声明就比较合理了（可变需要来自可变）。
-     *
-     * ### 闭包是所有权状态的描述
-     * 闭包其实就是所有权各种状态的描述：拥有所有权、所有权的可变引用、所有权的独不可变引用、没有所有权，对应到闭包的类型就为FnOnce、FnMut、Fn、fn。
-     * 所以闭包的类型与被捕获的变量类型没有关系，而是与闭包怎么捕获变量有关系，捕获操作简单来说是怎么使用变量。
      * 
-     * 比如上述（FnMut）的例子中，闭包捕获到变量进行了可变引用操作这个动作，那么闭包就成为FnMut类型，这也意味着闭包被调用时会修改被捕获的变量。如果改成以下示例：
+     * ### Fn
+     * 仅需要不可变地访问其上下文的函数属于Fn trait，并且只要上下文在作用域中存在，就可以在任意位置调用。
      * ```rust
-     * // 闭包类型只与闭包怎么捕获变量的操作有关系，与变量自己的类型没有直接关系
+     * // 闭包类型只与闭包怎么**使用**被捕获变量的操作有关系，与变量自己的类型、捕获变量的方式没有直接关系
      * let mut s = String::new();
      * let mut update_string = |str| s.push_str(str); // FnMut
      * let mut update_string = |str| println!("{}", s.len()); // Fn
      * update_string("Hello");
      * println!("{s}");
      * ```
-     * - 变量的可变引用可以进行可变引用操作 `s.push_str()`，因为 `push_str` 的 `Self` 为 `&mut self`，被闭包捕获可变引用操作，那么闭包就为FnMut；
-     * - 变量的可变引用也可以进行不可变引用操作 `s.len()`，因为 `len` 的 `Self` 为 `&self`，被闭包捕获不可变引用操作，那么闭包就为Fn。
+     * 为什么是不可变引用的使用操作？从 len 函数的第一个参数 Self 中可以看到 `&self` 是一个不可变引用。
      *
-     * 又或者以下例子，闭包捕获不可变引用的操作：
+     * ### 闭包是所有权状态的描述
+     * 闭包其实就是所有权各种状态的描述：拥有所有权、所有权的可变引用、所有权的独不可变引用、没有所有权，对应到闭包的类型就为FnOnce、FnMut、Fn、fn。
+     * 所以闭包的类型与被捕获的变量类型没有关系，而是与闭包怎么**使用**被捕获变量有关系，捕获操作简单来说是怎么使用变量。
+     * 
+     * 比如上述（FnMut）的例子中，闭包捕获到变量进行了可变引用操作这个动作，那么闭包就成为FnMut类型，这意味着闭包被调用时会修改被捕获的变量。如果改成以下示例：
+     * ```rust
+     * // 闭包类型只与闭包怎么**使用**被捕获变量的操作有关系，与变量自己的类型、捕获变量的方式没有直接关系
+     * let mut s = String::new();
+     * let mut update_string = |str| s.push_str(str); // FnMut
+     * let mut update_string = |str| println!("{}", s.len()); // Fn
+     * update_string("Hello");
+     * println!("{s}");
+     * ```
+     * - 变量的可变引用可以进行可变引用操作 `s.push_str()`，因为 `push_str` 的 `Self` 为 `&mut self`，被闭包捕获可变引用的使用操作，那么闭包就为FnMut；
+     * - 变量的可变引用也可以进行不可变引用操作 `s.len()`，因为 `len` 的 `Self` 为 `&self`，被闭包捕获不可变引用的使用操作，那么闭包就为Fn。
+     *
+     * 又或者以下例子，闭包捕获不可变引用的使用操作：
      * ```rust
      * let s = String::from("Hello World");
      * let compare_len_with_s = |str: &str| println!("{}", str.len() == s.len());
      * compare_len_with_s("Hello");
      * println!("{s}");
      * ```
-     * 为什么是不可变引用的操作？从 len 函数的第一个参数 Self 中可以看到 `&self` 是一个不可变引用。
+     * 为什么是不可变引用的使用操作？从 len 函数的第一个参数 Self 中可以看到 `&self` 是一个不可变引用。
      *
-     * 也就是理解闭包捕获变量的操作：看变量怎么用（函数的`Self`是什么），Self是什么类型，它所代表的操作被闭包捕获，闭包就是什么类型。
-     * 比如 `s.len()` len 函数的 `&self` 意味着闭包捕获的是一个不可变引用的操作，闭包就是Fn，管理闭包的变量可以不mut。
-     * 又比如 `s.push_str()` 的 `&mut self` 意味着闭包捕获的是一个可变引用的操作，闭包就是FnMut，管理闭包的变量需要mut。
-     *
+     * 也就是理解闭包使用被捕获变量的操作：看变量怎么用（函数的`Self`是什么），Self是什么类型，它所代表的操作被闭包捕获，闭包就是什么类型。
+     * 比如 `s.len()` len 函数的 `&self` 意味着闭包捕获的是一个不可变引用的使用操作，闭包就是Fn，对应的闭包变量可以不mut。
+     * 又比如 `s.push_str()` 的 `&mut self` 意味着闭包捕获的是一个可变引用的操作，闭包就是FnMut，对应的闭包变量需要mut。
+     * 
+     * https://zhuanlan.zhihu.com/p/288626364 这张图属于从闭包范围的角度来解释闭包的关系。
+     * fn>Fn>FnMut>FnOnce，fn extends Fn extends FnMut extends FnOnece，如能实现FnMut的一定能实现Fn。
+     * 
+     * 既然 fn extends Fn extends FnMut extends FnOnce，那么从继承和多态的角度上解释闭包的关系：https://zhuanlan.zhihu.com/p/341815515。
+     * FnOnce被FnMut继承，那么FnMut类型就可以赋值给FnOnce类型（多态），同样，Fn能够赋值给FnMut、FnOnce类型。
+     * 
+     * > 为什么需要设计成 Fn extends FnMut extends FnOnce呢？
+     * > 
+     * > 来自GPT的回答：这种继承关系的设计允许Rust在编译时进行更精确的借用检查，确保内存安全。它反映了一个从“可能完全消耗捕获的变量（FnOnce）”到“可能改变捕获的变量（FnMut）”再到“不改变捕获的变量（Fn）”的权限层次。这样的设计使得Rust的闭包既灵活又安全，能够根据不同的需求选择合适的闭包类型。
+     * 
+     * 
+     * 
      *
      * ### 总结
      * 闭包（closure）是函数指针（function pointer）和上下文（context）的组合。
@@ -107,12 +131,11 @@ fn main() {
      * 带有可变上下文（mutable context）的闭包属于FnMut
      * 拥有其上下文的闭包属于FnOnce
      *
-     *
      */
 
     fn fn_once<F>(func: F)
     where
-        F: FnOnce(usize) -> bool + Copy,
+        F: FnOnce(usize) -> bool,
     {
         println!("{}", func(3));
         println!("{}", func(4));
