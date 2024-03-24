@@ -271,3 +271,82 @@ let update_string = |str| -> String {s.push_str(str); s };
 
 闭包**捕获变量的方式**是指闭包每一次**捕获**变量时，对应的函数如 `fn push_str(&mut self)` 或 `fn len(&self)` 中 `Self` 的类型；
 闭包**使用变量的方式**是指整个闭包中单个或多个捕获方式综合下来的交集类型，闭包每一次使用变量都会按照这个交集类型对应的规则处理。如 `FnOnce` 使用会消耗变量所有权。
+
+### Code
+
+```rust
+fn main {
+    fn fn_once<F>(func: F)
+    where
+        F: FnOnce(usize) -> bool + Copy,
+    {
+        println!("{}", func(3));
+        println!("{}", func(4));
+    }
+
+    let x = vec![1, 2, 3];
+    fn_once(|z| z == x.len());
+    println!("{:?}", x);
+
+    let mut s = String::new();
+    // let update_string = |str| s.push_str(str); 闭包捕获可变借用，需要闭包变量也设置为可变
+    let mut update_string = |str| s.push_str(str);
+    update_string("Hello");
+    println!("{s}");
+
+    // 闭包类型只与闭包怎么捕获变量的操作有关系，与变量自己的类型没有直接关系。
+    let mut s = String::new();
+    let mut update_string = |str| s.push_str(str); // FnMut
+    let mut update_string = |str| println!("{}", s.len()); // Fn
+    update_string("Hello");
+    println!("{s}");
+
+    let s = String::from("Hello World");
+    let compare_len_with_s = |str: &str| println!("{}", str.len() == s.len());
+    compare_len_with_s("Hello");
+    println!("{s}");
+
+    let mut s = String::from("Hello World");
+    let mut closure = || {
+        println!("{}", &mut s);
+        s
+    };
+    closure();
+
+    let mut s = String::from("Hello World");
+    let mut closure = move || {
+        println!("{}", &mut s);
+        println!("{}", s.len());
+    };
+    closure();
+
+    let mut s = String::from("Hello World");
+    let ss = &s;
+    let mut closure = || {
+        println!("{}", s.len());
+        println!("{}", (&s).len());
+        // println!("{}", (&mut s).len());
+        // println!("{}", &mut 11);
+        println!("{}", ss.len());
+    };
+    closure();
+
+    fn fn_once_type<F: FnOnce()>(f: F) {
+        f()
+    }
+    fn fn_mut_type<F: FnMut()>(mut f: F) {
+        // 接收并使用可变实参参数，需要使用可变形参（这样才能保证语法分析器分析可变实参带来的印象，需要使用的状态下才需要表示mut，如果不使用可变参数可以不标识mut）
+        f()
+    }
+    fn fn_type<F: Fn()>(f: F) {
+        f()
+    }
+
+    let s = String::from("Hello World");
+    let closure = || println!("{}", s);
+    fn_once_type(closure);
+    fn_mut_type(closure);
+    fn_type(closure);
+
+}
+```
