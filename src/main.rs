@@ -4,6 +4,8 @@ use std::{env, error::Error, fs, process};
 fn main() {
     /*
      * ## 闭包 Closure
+     * 
+     * > 本章内容较长，且在本章内容尾部更新了对闭包的认识，读者应读完全章，不要取其中部分。
      *
      * 闭包是一种匿名函数，它可以赋值给变量也可以作为参数传递给其它函数，不同于函数的是，它允许捕获调用者作用域中的值。
      *
@@ -172,7 +174,7 @@ fn main() {
      * let closure = move || println!("{}", s.len()); // Fn
      * ```
      * 上面的示例再一次验证：一个闭包实现了哪种 Fn 特征取决于该闭包如何**使用**被捕获的变量，而不是取决于闭包如何捕获它们。
-     * 
+     *
      * > 注意，`(&mut s).len()` 使用方式是先创建可变引用，也就是FnMut和Fn都存在，所以闭包类型是FnMut。
      * > ```rust
      * > let mut s = String::from("Hello World");
@@ -180,17 +182,67 @@ fn main() {
      * > ```
      *
      * ### 三种Fn的关系
+     * 实际上，一个闭包并不仅仅实现某一种 Fn 特征，Fn extends FnMut extends FnOnce：
      *
+     * - **所有的闭包都自动实现了 FnOnce 特征，因此任何一个闭包都至少可以被调用一次**
+     * - **没有移除所捕获变量的所有权的闭包自动实现了 FnMut 特征**
+     * - **不需要对捕获变量进行改变的闭包自动实现了 Fn 特征**
      *
+     * 上述的规则是对闭包所有权状态的描述，在使用闭包时可快速判断，但其根本在 `闭包是所有权状态的描述` 章节的分析中。
      *
+     * ```rust
+     * fn fn_once_type<F: FnOnce()>(f: F) {
+     *      f()
+     * }
+     * fn fn_mut_type<F: FnMut()>(mut f: F) { // 接收并使用可变实参参数，需要使用可变形参（这样才能保证语法分析器分析可变实参带来的印象，需要使用的状态下才需要表示mut，如果不使用可变参数可以不标识mut）
+     *      f()
+     * }
+     * fn fn_type<F: Fn()>(f: F) {
+     *      f()
+     * }
      *
+     * let s = String::from("Hello World");
+     * let closure = || println!("{}", s);
+     * fn_once_type(closure);
+     * fn_mut_type(closure);
+     * fn_type(closure);
+     * ```
      *
+     * 对第二条规则的用例分析：
+     * ```rust
+     * fn exec<'a, F: FnMut(&'a str) -> String>(mut f: F) {
+     *     f("hello");
+     * }
+     * let mut s = String::new();
+     * let update_string = |str| -> String {s.push_str(str); s }; error 在FnMut和FnOnce都显式存在的情况下取交集为FnOnce，而FnOnce闭包不能使用两次变量，因为第一次使用时消耗了变量所有权！
+     * exec(update_string);
+     * ```
+     *
+     * 上面的例子再一次更新对闭包的认识：**一个闭包实现了哪种 Fn 特征取决于该闭包如何使用被捕获的变量，而不是取决于闭包如何捕获它们。**
+     *
+     * 这其中的使用方式是指一个闭包中，闭包类型是什么，那么使用变量时他的规则就是什么，比如上面的例子中：
+     * ```rust
+     * let update_string = |str| -> String {s.push_str(str); s };
+     * ```
+     * 这个闭包编译就会错误，因为在FnMut和FnOnce都显式存在的情况下取交集为FnOnce，而FnOnce闭包不能使用两次变量，因为第一次使用时消耗了变量所有权！
+     * 它什么时候使用了两次变量呢？`s.push_str` 和 `s`这两次。虽然 `s.push_str` 是 `&mut self`，对应FnMut类型，
+     * 但在 `FnMut&FnOnce = FnOnce` 中闭包的最终的类型是 `FnOnce`，这就意味着闭包使用变量一次就会消耗变量的所有权。因为**一个闭包实现了哪种 Fn 特征取决于该闭包如何使用被捕获的变量，而不是取决于闭包如何捕获它们。**
+     *
+     * 所以更新闭包捕获变量的方式和闭包使用变量的方式这两种理解：
+     * 闭包**捕获变量的方式**是指闭包每一次**捕获**变量时，对应的函数如 `fn push_str(&mut self)` 或 `fn len(&self)` 中 `Self` 的类型；
+     * 闭包**使用变量的方式**是指整个闭包中单个或多个捕获方式综合下来的交集类型，闭包每一次使用变量都会按照这个交集类型对应的规则处理。如 `FnOnce` 使用会消耗变量所有权。**
+     * 
+     * 这两条规则结合上述的三条规则，可以快速确定闭包的类型，在实际项目中，建议先使用 Fn 特征，然后编译器会告诉你正误以及该如何选择。
+     * 
      * ### 总结
      * 闭包（closure）是函数指针（function pointer）和上下文（context）的组合。
      * 没有上下文的闭包就是一个函数指针。
      * 带有不可变上下文（immutable context）的闭包属于Fn
      * 带有可变上下文（mutable context）的闭包属于FnMut
      * 拥有其上下文的闭包属于FnOnce
+     * 
+     * 闭包**捕获变量的方式**是指闭包每一次**捕获**变量时，对应的函数如 `fn push_str(&mut self)` 或 `fn len(&self)` 中 `Self` 的类型；
+     * 闭包**使用变量的方式**是指整个闭包中单个或多个捕获方式综合下来的交集类型，闭包每一次使用变量都会按照这个交集类型对应的规则处理。如 `FnOnce` 使用会消耗变量所有权。**
      *
      */
 
@@ -234,6 +286,7 @@ fn main() {
     let mut s = String::from("Hello World");
     let mut closure = move || {
         println!("{}", &mut s);
+        println!("{}", s.len());
     };
     closure();
 
@@ -247,4 +300,23 @@ fn main() {
         println!("{}", ss.len());
     };
     closure();
+
+    fn fn_once_type<F: FnOnce()>(f: F) {
+        f()
+    }
+    fn fn_mut_type<F: FnMut()>(mut f: F) {
+        // 接收并使用可变实参参数，需要使用可变形参（这样才能保证语法分析器分析可变实参带来的印象，需要使用的状态下才需要表示mut，如果不使用可变参数可以不标识mut）
+        f()
+    }
+    fn fn_type<F: Fn()>(f: F) {
+        f()
+    }
+
+    let s = String::from("Hello World");
+    let closure = || println!("{}", s);
+    fn_once_type(closure);
+    fn_mut_type(closure);
+    fn_type(closure);
+
+  
 }
