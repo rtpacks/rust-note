@@ -63,12 +63,27 @@ fn main() {
      * fn factory(x:i32) -> Box<dyn Fn(i32) -> i32> {
      *     let num = 5;
      *     if x > 1{
-     *         Box::new(move |x| x + num)
+     *         Box::new(move |x| x + num) // 仅实现了Fn特征，需要将所有权强制移入
      *     } else {
      *         Box::new(move |x| x - num)
      *     }
      * }
      * ```
+     *
+     * 当闭包作为函数参数或函数返回值时如何正确的标注函数签名？
+     *
+     * 首先，Rust 要求函数的参数和返回值的内存大小是固定的，因此闭包作为Trait，它的内存大小不固定，如 `Fn(i32) -> i32` 是不能够直接作为参数和返回值的。
+     * 但有特殊情况，把闭包当作参数时，可以直接声明为闭包类型如 `Fn(i32) -> i32`，这是因为函数体内的**参数闭包**有且只有一种闭包类型，Rust 通过使用**trait界定（trait bounds）**允许函数接受任何实现了指定trait的类型。
+     * 可以理解成 Rust 自动推断为 `impl trait` 形式。这种参数闭包直接声明为闭包类型的方式提供了足够的灵活性，同时避免了impl Trait直接在参数位置的使用。
+     *
+     * 其次，闭包作为返回值时，为了遵守 “Rust 要求函数的参数和返回值的内存大小是固定的” 的原则，不能直接将闭包类型作为函数的返回值声明，而应该使用 `impl trait` 或特征对象。
+     * 如果只有一种闭包，那么可以直接使用 `impl trait` 形式，如 `impl Fn(i32) -> i32`，表明返回一个实现了指定trait的类型，impl Trait 形式来说明一个函数返回了一个类型，该类型实现了某个特征，外部使用时只能使用该特征已声明的属性，因此是固定大小的。(函数返回中的impl trait)[https://course.rs/basic/trait/trait.html#%E5%87%BD%E6%95%B0%E8%BF%94%E5%9B%9E%E4%B8%AD%E7%9A%84-impl-trait]
+     * 如果存在多个闭包类型，那么可以使用特征对象 `Box<dyn Fn(i32) -> i32>` 来作为函数的返回值。
+     *
+     * > 多个闭包类型即多个位置声明定义的闭包，每个闭包都有其自己独特的匿名类型（这个类型就是类似 `i32 String` 的一种数据格式类型），这是因为**闭包类型不仅仅是由其参数和返回类型定义**的，还包括它捕获的环境。每个闭包根据其捕获的环境（变量、生命周期等）具有不同的类型。
+     * 
+     * 同时，当函数返回闭包时，需要注意返回的闭包是否具有变量的所有权，因为只有闭包获取了变量的所有权，在当前函数执行结束返回后，变量才不会被释放，才不会出现引用问题。当闭包作为函数的返回值返回时，常见的闭包都会有 `move` 关键字强制获取变量的所有权。
+     *
      *
      * ### & mut &mut 的各种位置认识
      * 阅读：https://github.com/sunface/rust-course/discussions/619#discussioncomment-2623736
@@ -100,6 +115,7 @@ fn main() {
     let f = factory();
     println!("{}", f(1));
 
+    // impl trait 只允许一种具体的类型，在有多种类型返回值时不适用
     // fn factory(x: i32) -> impl Fn(i32) -> i32 {
     //     let num = 5;
     //     if x > 1 {
@@ -108,4 +124,14 @@ fn main() {
     //         |x| x - num
     //     }
     // }
+
+    fn factoryDyn(x: i32) -> Box<dyn Fn(i32) -> i32> {
+        let num = 5;
+
+        if x > 1 {
+            Box::new(move |x| x + num)
+        } else {
+            Box::new(move |x| x - num)
+        }
+    }
 }
