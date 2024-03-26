@@ -98,6 +98,7 @@ fn factory(x:i32) -> Box<dyn Fn(i32) -> i32> {
 ### 阅读
 
 - [泛型、特征、特征对象](https://course.rs/basic/trait/intro.html)
+- [闭包的使用案例](https://www.cnblogs.com/lilpig/p/17022845.html#%E5%A4%8D%E6%9D%82%E4%B8%80%E7%82%B9%E6%8A%8A%E9%97%AD%E5%8C%85%E7%94%A8%E5%9C%A8%E5%87%BD%E6%95%B0%E4%B8%8A)
 
 ### Code
 
