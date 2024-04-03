@@ -1,5 +1,5 @@
 use ilearn::{run, Config};
-use std::{env, error::Error, fs, process};
+use std::{array::IntoIter, env, error::Error, fmt::Display, fs, process};
 
 fn main() {
     /*
@@ -46,7 +46,7 @@ fn main() {
      *
      * 迭代器 next 函数返回值是 {value: any, done: boolean} 形式，所以只需要实现一个函数，循环调用一个对象（迭代器） next 函数取出值，当 next 函数给出终止信号 done = true 时，停止函数流程，就能伪实现可迭代。
      *
-     * ```rust
+     * ```javascript
      * function into_iter(arr: number[]) {
      *      let index = 0;
      *      return {
@@ -123,20 +123,11 @@ fn main() {
      *
      * 与 JavaScript 手动创建迭代器对象非常相似，两者都有 `next` 函数， for 循环通过不停调用迭代器上的 next 方法，来获取迭代器中的元素。
      *
-     * 当然也可以手动执行 `next` 函数来获取迭代器中的元素，因为涉及到rust的所有权模型，所以rust的next调用需要多注意几步：
-     * - `next(&mut self)` 是可变引用，调用者必须要可变（mut）。手动迭代必须将迭代器声明为 mut 可变，因为调用 next 会改变迭代器其中的状态数据（当前遍历的位置等），而 for 循环去迭代则无需标注 mut，因为它会帮我们自动完成
-     * - rust中只有Option，没有undefined/null，next的返回是一个Option类型，即有值为Some，无值时为None
-     * - next 方法对迭代器的遍历是消耗性的，每次消耗它一个元素，最终迭代器中将没有任何元素，只能返回 None。
+     * 当然也可以手动执行 `next` 函数来获取迭代器中的元素，因为涉及到rust的所有权模型，所以 rust 的 next 调用需要牢记几点：
+     * - `next(&mut self)` 是可变引用，调用者必须要可变（mut）。即手动迭代必须将迭代器声明为 mut，因为调用 next 会改变迭代器其中的状态数据（当前遍历的位置等），而 for 循环迭代自动标注 mut 可变。
+     * - rust 中有 Option 没有undefined/null，next 的返回是一个 Option 类型，即有值为 Some，无值时为 None
+     * - next 方法对迭代器的遍历是**消耗性**的，每次消耗它一个元素，最终迭代器中将没有任何元素，只能返回 None。
      * - 遍历是按照迭代器中元素的排列顺序依次进行的
-     *
-     *
-     * ```javascript
-     * let arr = [1, 2];
-     * let iter = arr.values();
-     * iter.next(); // {value: 1, done: false}
-     * iter.next(); // {value: 1, done: false}
-     * iter.next(); // {value: undefined, done: true}
-     * ```
      *
      * ```rust
      * let v = vec![1, 2, 3];
@@ -145,6 +136,69 @@ fn main() {
      * iter.next(); // Some(2)
      * iter.next(); // None
      * ```
+     *
+     * JavaScript代码实例
+     * ```javascript
+     * let arr = [1, 2];
+     * let iter = arr.values();
+     * iter.next(); // {value: 1, done: false}
+     * iter.next(); // {value: 1, done: false}
+     * iter.next(); // {value: undefined, done: true}
+     * ```
+     *
+     * 对比JavaScript代码可以猜测到，rust 迭代也是通过循环调用迭代器的 next 函数来实现的。
+     *
+     * #### 实现 for 伪迭代
+     *
+     * ```rust
+     * let v = vec![1, 2, 3];
+     * let mut iter = v.into_iter();
+     * loop {
+     *      match iter.next() {
+     *          Some(x) => println!("{x}");
+     *          None => break;
+     *      }
+     * }
+     * ```
+     *
+     * 和JavaScript将可迭代对象转换成迭代器一样，使生成的对象拥有next函数，然后循环调用，最终完成迭代。将其改造成 `forFn`：
+     * ```rust
+     * fn forFn<T>(iter: T)
+     * where
+     *      T: Iterator,
+     *      T::Item: std::fmt::Debug,
+     * {
+     *      loop {
+     *          match iter.next() {
+     *              Some(x) => println!("{#?}", x);
+     *              None => break;
+     *          }
+     *      }
+     * }
+     * ```
+     *
+     * rust 的所有权决定了into_iter函数不好实现，因此可以先参考JavaScript实现方式来理解整个流程。
+     *
+     * 此外，可迭代对象除了通过 `into_iter` 函数转换成迭代器，还可以通过完全限定的方式即 `IntoIterator::into_iter(values)` 生成迭代器，这种调用方式跟 `values.into_iter()` 是等价的：
+     * 
+     * > 完全限定：https://course.rs/basic/trait/advance-trait.html#%E5%AE%8C%E5%85%A8%E9%99%90%E5%AE%9A%E8%AF%AD%E6%B3%95
+     * 
+     * ```rust
+     * let values = vec![1, 2, 3];
+     * {
+     *     let result = match IntoIterator::into_iter(values) {
+     *         mut iter => loop {
+     *             match iter.next() {
+     *                 Some(x) => { println!("{}", x); },
+     *                 None => break,
+     *             }
+     *         },
+     *     };
+     *     result
+     * }
+     * ```
+     * 
+     * 
      */
 
     let v = vec![1, 2, 3];
@@ -158,4 +212,25 @@ fn main() {
     println!("{}", iter.next().unwrap_or_default());
     println!("{}", iter.next().unwrap_or_default());
     println!("{}", iter.next().unwrap_or_default());
+
+    // 实现for循环迭代功能
+    let v = vec![1, 2, 3];
+    let mut iter = v.into_iter();
+
+    fn forFn<T>(mut iter: T)
+    where
+        T: Iterator,
+        T::Item: std::fmt::Debug,
+    {
+        loop {
+            match iter.next() {
+                Some(x) => {
+                    println!("{:?}", x);
+                }
+                None => break,
+            }
+        }
+    }
+
+    forFn(iter);
 }
