@@ -197,3 +197,85 @@ println!("{:?}", index);
 ### 更多迭代器方法
 
 阅读：https://course.rs/std/iterator
+
+
+### Code
+```rust
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut iter = v.into_iter();
+    let total: i32 = iter.sum();
+    // println!("{:#?}", iter); 不能再访问iter，因为sum消费了迭代器和迭代器中的元素
+    println!("{total}");
+
+    let v = vec![1, 2, 3];
+    let mut iter = v.into_iter();
+
+    let total: i32 = iter.map(|x| x + 1).sum();
+    println!("{total}");
+
+    let v = vec![1, 2, 3];
+    let newV: Vec<_> = v.iter().map(|x| x + 1).collect();
+    println!("{:?}", newV);
+    let names = ["sunface", "sunfei"];
+    let ages = [18, 18];
+    let map: HashMap<_, _> = names.into_iter().zip(ages.into_iter()).collect();
+    println!("{:?}", map);
+
+    let mut index = 0;
+    let v: Vec<_> = vec![0; 10]
+        .into_iter()
+        .map(|x| {
+            index += 1;
+            index
+        })
+        .collect();
+    let level = 8;
+    let standards: Vec<_> = v.into_iter().filter(|x| *x >= level).collect();
+    println!("{:?}", standards);
+
+    // 实现一个迭代器非常方便，只需要手动实现next方法，其他的迭代器方法都有基于next方法的默认实现
+    struct Counter {
+        count: i32,
+    }
+    impl Counter {
+        fn new() -> Self {
+            Counter { count: 0 }
+        }
+    }
+    impl Iterator for Counter {
+        type Item = i32;
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.count < 5 {
+                self.count += 1;
+                Some(self.count)
+            } else {
+                None
+            }
+        }
+    }
+
+    let total: i32 = Counter::new()
+        .zip(Counter::new().skip(1))
+        .map(|(x, y)| x + y)
+        .sum();
+    println!("{:?}", total);
+
+    let vector: Vec<_> = Counter::new().zip(Counter::new().skip(4)).collect();
+    println!("{:?}", vector);
+
+    let vector: Vec<_> = Counter::new().skip(3).filter(|x| *x > 0).collect();
+    println!("{:?}", vector);
+
+    // turbo fish语法
+    let vector = Counter::new().skip(3).filter(|x| *x > 0).collect::<Vec<_>>();
+    println!("{:?}", vector);
+    let total = Counter::new().skip(3).filter(|x| *x > 0).sum::<i32>();
+    println!("{:?}", total);
+
+    // enumerate 生成带有索引的方法（迭代器适配器）
+    let v = vec![1, 2, 3, 4];
+    let index: Vec<_> = v.into_iter().enumerate().collect();
+    println!("{:?}", index);    
+}
+```
