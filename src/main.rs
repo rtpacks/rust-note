@@ -144,10 +144,23 @@ fn main() {
      *
      * let vector: Vec<_> = Counter::new().skip(3).collect();
      * println!("{:?}", vector);
+     *
+     * // turbo fish 语法
+     * let vector = Counter::new().skip(3).collect::<Vec<i32>>()();
+     * println!("{:?}", vector);
+     *
+     * let total = Counter::new().skip(3).sum::<i32>();
+     * println!("{:?}", total);
      * ```
      *
      * - skip 是一个迭代器适配器，它的作用是跳过迭代器中的前n个元素，然后返回一个新的迭代器。
      * - zip 是一个迭代器适配器，它的作用就是将两个迭代器的内容压缩到一起，形成 `Iterator<Item=(ValueFromA, ValueFromB)>` 也就是形如 `[(name1, age1), (name2, age2)]` 的迭代器，可以类比 JavaScript 中的 Entries 类型。两者迭代器长度不一样时，以最短长度为结束条件。
+     *
+     * > turbo fish 语法参考
+     * > turbofish 语法可以允许不在变量上标注类型，在调用函数时传递目标类型以完成类型指定。
+     * > https://www.cnblogs.com/rotk2022/p/16449651.html
+     * > https://rustwiki.org/zh-CN/edition-guide/rust-2018/trait-system/impl-trait-for-returning-complex-types-with-ease.html#%E5%8F%82%E6%95%B0%E4%BD%8D%E7%BD%AE
+     * > https://rust-lang.github.io/impl-trait-initiative/explainer/apit_turbofish.html
      *
      * #### 实现 Iterator 特征的其它方法
      * **其他迭代器方法都具有基于 next 方法的默认实现**，所以无需像 next 这样手动去实现。如上面案例使用到的 `zip, map, filter, sum` 等方法。
@@ -160,8 +173,16 @@ fn main() {
      * let index: Vec<_> = v.into_iter().enumerate().collect();
      * println!("{:?}", index);
      * ```
-     * 
      *
+     * ### 性能
+     *
+     * 迭代器是 Rust 的 零成本抽象（zero-cost abstractions）之一，意味着抽象并不会引入运行时开销，这与 Bjarne Stroustrup（C++ 的设计和实现者）在 Foundations of C++（2012） 中所定义的 零开销（zero-overhead）如出一辙。
+     * > In general, C++ implementations obey the zero-overhead principle: What you don’t use, you don’t pay for. And further: What you do use, you couldn’t hand code any better.
+     * > 一般来说，C++的实现遵循零开销原则：没有使用时，你不必为其买单。 更进一步说，需要使用时，你也无法写出更优的代码了。
+     * 阅读：https://course.rs/advance/functional-programing/iterator.html#%E8%BF%AD%E4%BB%A3%E5%99%A8%E7%9A%84%E6%80%A7%E8%83%BD
+     *
+     * ### 更多迭代器方法
+     * 阅读：https://course.rs/std/iterator
      *
      *
      */
@@ -230,6 +251,12 @@ fn main() {
 
     let vector: Vec<_> = Counter::new().skip(3).filter(|x| *x > 0).collect();
     println!("{:?}", vector);
+
+    // turbo fish语法
+    let vector = Counter::new().skip(3).filter(|x| *x > 0).collect::<Vec<_>>();
+    println!("{:?}", vector);
+    let total = Counter::new().skip(3).filter(|x| *x > 0).sum::<i32>();
+    println!("{:?}", total);
 
     // enumerate 生成带有索引的方法（迭代器适配器）
     let v = vec![1, 2, 3, 4];
