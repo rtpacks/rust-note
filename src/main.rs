@@ -94,7 +94,9 @@ fn main() {
      * Index::index(&array, 0);
      * ```
      *
+     *
      * #### 意想不到的自动引用
+     *
      * 看一个复杂的例子：
      * ```rust
      * fn do_stuff<T: Clone>(value: &T) {
@@ -103,7 +105,7 @@ fn main() {
      * ```
      *
      * 按照**点操作符魔法般的转换**跑一遍流程：
-     * 1. 编译器检查能不能进行**值方法调用**， value 的类型是 `&T`，类型 Clone 具有 `Clone::clone(&self) -> Self` 方法，value 类型 `&T` 符合 Self 类型 `&self` ，因此可以进行值方法调用，cloned 的类型是 T。
+     * 1. 编译器检查能不能进行**值方法调用**，将 `value.clone()` 变为 `Clone::clone(value: &T)`，由于 T 实现了 Clone 特征，能满足 `Clone::clone(&self) -> Self` 签名和接收者类型，因此调用的是 T 的 clone 方法，值方法调用成功，cloned 的类型是 T。
      *
      * 如果去掉 `Clone` 限制，代码变为：
      * ```rust
@@ -111,10 +113,20 @@ fn main() {
      *     let cloned = value.clone();
      * }
      * ```
-     * 直觉上这段代码会报错，因为 T 没有实现 Clone 特征。其实这是能正常运行的代码，易混淆点就在于**点操作符魔法般的转换**。根据流程进行推理：
-     * 1. T 没有实现 Clone 特征，因为值方法调用 `Clone::clone(value)` 调用失败
-     * 2. 增加自动引用，T 变为 `&T`，此时 `&T` 实现了 `Clone` 类型 (所有的引用类型都可以被复制，其实是复制一份地址)，引用方法调用成功
-     * 3. 最终，复制出一份引用指针，`cloned` 的类型是 `&T` 
+     * 直觉上这段代码会报错，因为 T 没有实现 Clone 特征。其实这是能正常运行的代码，易混淆点就在于**点操作符魔法般的转换**和**调用谁的方法**。
+     *
+     * 在推理前，需要牢牢记住：结合点操作符的转换流程和从**原有类型**下手，对比函数签名，结合接收者 `Self`，才能推出是否允许调用以及调用谁的方法
+     *
+     *
+     * 根据流程进行推理：
+     * 1. 给定 `&T`，从原有类型 T 下手分析，`T` 没有实现 Clone 特征，没有 clone 方法，因此不能使用 `Clone::clone(&self) -> Self`，值方法调用失败
+     * 2. 自动增加引用，`T` 变为 `&T`，此时 `&T` 实现了 `Clone` 类型 (所有的引用类型都可以被复制，其实是复制一份地址)，可以调用 clone 方法，根据 `Clone::clone(&self) -> Self` 签名，推出接收者 Self 为 `&&T`，具体形式为 `Clone::clone(&self: &&T) -> &T`，引用方法调用成功
+     * 最终复制出一份引用指针，`cloned` 的类型是 `&T` 。
+     *
+     * 当然，也可以一步到位：给定的数据类型 `value: &T` ，T 未实现 Clone 特征，但 `&T` 是一个引用实现了 Clone，所以根据 `Clone::clone(&self) -> Self` 签名，推出接收者 Self 为 `&&T`，具体形式为 `Clone::clone(&self: &&T) -> &T`，返回的类型为 `&T`。
+     *
+     * 总结：结合点操作符的转换流程，先确定非引用的原有类型 `T`（非`&T`） 是否实现了某个特征（是否允许调用该方法），再确定方法的接收者 `Self` 和返回类型，也就是先看非引用的原有类型，然后再对比方法的接收者和返回类型，这样才不会混淆能不能调用以及到底调用的是谁的方法。
+     *
      *
      * 一个更复杂的自动引用生效的例子：
      * ```rust
@@ -127,27 +139,23 @@ fn main() {
      * }
      * ```
      * 复杂类型派生 Clone 的规则：**一个复杂类型能否派生Clone `#[derive(Clone)]`，取决于它内部的所有子类型是否都实现了 Clone 特征。**
-     * 
-     * 因此，`Container<T>(Arc<T>)` 是否实现 Clone 的关键在于 T 类型是否实现了 Clone 特征。
-     * 
-     * 上面例子中，clone_containerrs 函数的第一个参数 `foo: &Container<i32>` 由于 i32 实现了 Clone 特征，所以 `Container<i32>` 派生（实现） Clone 特征，且 foo 满足函数 `Clone::clone(&self) -> Self` 的 Self 接收者的 `&self` 类型，因此编译器可以直接进行值方法调用，`foo.clone() == Clone::clone(foo)`，由此也可以看出 foo_cloned 的类型是 `Container<i32>`。
-     * 
-     * 而第二个参数 `bar: &Containers<T>` 使用泛型 T，由于泛型 `T` 没有实现 Clone 特征，所以 `Containers<T>` 是没有派生（实现）Clone 特征的。按照点操作符魔法般的转换流程，第一步值方法调用，`Containers<T>` 未实现 Clone 特征，所以调用失败 `Clone::clone(&self) -> Self`，第二步引用方法调用成功，因为引用类型实现了 Clone 特征（所有引用都可以被复制，复制一份地址），因此 bar_cloned 是 `&Container<T>` 类型，是一份指针数据。
-     * 
+     * 因此确定 `Container<T>(Arc<T>)` 是否实现 Clone 的关键在于 T 类型是否实现了 Clone 特征。
+     *
+     * 按照**点操作符魔法般的转换流程**进行推理，推理前注意：结合点操作符的转换流程和从**原有类型**下手，对比函数签名，结合接收者 `Self`，才能推出是否允许调用以及调用谁的方法
+     *
+     * clone_containers 函数的第一个参数 `foo: &Container<i32>`，由于 i32 实现了 Clone 特征，所以 `Container<i32>` 能派生（实现） Clone 特征。推理：
+     * 1. 值方法调用，将 `foo.clone()` 转化为 `Clone::clone(foo: &Container<i32>)`，由于 `Container<i32>` 能派生（实现） Clone 特征，根据 `Clone::clone(&self) -> Self`，推出返回类型为 `Container<i32>`，即调用的方法是 `Container<i32>` 派生的 Clone 特征的 clone 方法，复制的是一份 `Container`。
+     *
+     * clone_containers 函数的第二个参数 `bar: &Containers<T>`，由于泛型 `T` 没有实现 Clone 特征，所以 `Containers<T>` 没有派生（实现）Clone 特征。
+     * 1. 值方法调用，将 `bar.clone()` 转化为 `Clone::clone(bar: &Container<T>)`，由于 `Containers<T>` 没有派生（实现）Clone 特征，值方法调用失败。
+     * 2. 自动增加引用，将 `bar.clone` 变为 `(&bar).clone`，即等价于 `Clone::clone(&bar: &&Container<T>)`，由于引用实现了 Clone 特征，根据 `Clone::clone(&self) -> Self`，推出返回的类型为 `&Container<T>`，即调用的方法是 `&Container<T>` 引用实现的 Clone 特征的 clone 方法，复制的是一份指针。
+     *
      * ```rust
-     * Clone::clone(bar); 值方法调用失败，因为 Containers<T> 未实现 Clone 特征，不含有 clone 方法
-     * Clone::clone(&bar); 引用方法调用成功，自动增加引用
+     * Clone::clone(bar); 等价于 Clone::clone(bar: &Container<T>)，由于 Containers<T> 未实现 Clone 特征，不含有 clone 方法，所以值方法调用失败
+     * Clone::clone(&bar); 等价于 Clone::clone(&bar: &&Container<T>)，由于引用实现了 Clone 特征，根据 `Clone::clone(&self) -> Self`，推出返回的类型为 `&Container<T>`，引用方法调用成功
      * ```
-     * 
-     * 在判断点操作符的转换流程时，应该从原有的类型下手，即 `T` 中的方法优先级高于 `&T` 的方法。
-     * 
-     * 
-     * 
      *
-     *
-     *
-     *
-     *
+     * 总结：结合点操作符的转换流程，先确定非引用的原有类型 `T`（非`&T`） 是否实现了某个特征（是否允许调用该方法），再确定方法的接收者 `Self` 和返回类型，也就是先看非引用的原有类型，然后再对比方法的接收者和返回类型，这样才不会混淆能不能调用以及到底调用的是谁的方法。
      *
      * ### 变形记（transmutes）
      * 阅读：https://course.rs/advance/into-types/converse.html#%E5%8F%98%E5%BD%A2%E8%AE%B0transmutes
@@ -199,6 +207,10 @@ fn main() {
     let num = do_stuff(&9);
     let person = do_stuff(&Person { age: 18 });
     println!("{:#?}", person);
+
+    fn do_stuff2<T: Clone>(value: &T) {
+        let cloned = value.clone();
+    }
 
     #[derive(Clone)]
     struct Container<T>(Arc<T>);
