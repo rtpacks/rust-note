@@ -7,224 +7,78 @@ use std::{
 
 fn main() {
     /*
-     * ## newtype 和类型别名 TypeAlias
-     * 学习如何创建自定义类型，以及了解何为动态大小的类型
+     * ## 不定长类型 DST 和定长类型 Sized
+     * 
+     * 在 Rust 中类型有多种抽象的分类方式，如按照传统数据结构划分：基本类型、集合类型、复合类型等。如果从编译器何时能获知类型大小的角度出发，可以分成两类:
+     * - 定长类型( sized )，这些类型的大小在编译时是已知的，实现了 trait Sized。
+     * - 不定长类型( unsized )，与定长类型相反，它的大小只有到了**程序运行时**才能动态获知，这种类型又被称之动态大小类型/动态尺寸类型(dynamically sized type)（DST），或者非正式地称为非固定尺寸类型(unsized type)。切片和 trait对象是 DSTs 的两个例子。
      *
-     * ### newtype
-     * > https://course.rs/basic/compound-type/struct.html#%E5%85%83%E7%BB%84%E7%BB%93%E6%9E%84%E4%BD%93tuple-struct
+     * ### 动态大小类型 DST
+     * **动态大小类型/动态尺寸类型(dynamically sized type)（DST），指的类型大小不确定，而不是指数据大小不确定**。
      *
-     * 什么是 newtype？简单来说，就是使用**元组结构体**将已有的类型包裹起来，形成 `struct Meters(u32)` 的结构，此处 `Meters` 就是一个 newtype。
+     * 不能简单的将变量与类型视为只是一块栈内存或一块堆内存数据，比如 Vec 类型，rust将其分成两部分数据：存储在堆中的实际类型数据与存储在栈上的管理信息数据。
+     * 其中存储在栈上的管理信息数据是引用类型，包含实际类型数据的地址、元素的数量，分配的空间等信息，**rust 通过栈上的管理信息数据掌控实际类型数据的信息**。
+     * 这种**存储自身大小信息的类型**就可以称为定长类型（固定尺寸）。
      *
-     * newtype 的设计主要是为了增强类型安全并提供更明确的**语义区分**。这种设计允许开发者从现有的类型**派生出新的类型**，而这些新类型在逻辑上虽然与原始类型相似，但在类型系统中被视为完全不同的类型，这有助于避免类型间的错误混用。
+     * 反过来，不存储自身大小信息的就被称为动态尺寸类型（DST），如切片 `[T]` 与 特征对象 `trait object`。
+     * 以切片为例，**切片就是数据本身，不包含自身大小信息**，它可以在堆、栈、静态存储区，写作 `[T]`，常见的支持切片的类型有String类型、Array类型和Vec类型。
+     * 在 https://www.cnblogs.com/88223100/p/Rust-memory-distribution.html 中有切片的 rust 内存分布，可以清楚的看到切片 `[T]` 就是原始数据本身的一部分，**没有存储自身大小的信息**。
+     * 所以在使用切片时，需要通过外部手段（如引用或智能指针）来管理长度信息，如胖指针包含了两份元数据：**指向源数据中切片起点元素的指针和切片数据中包含的元素数量(切片的长度)**。
+     * 这种**不存储自身大小信息的类型**就是动态尺寸类型（DST）。
      *
-     * 例如 `struct Millimeters(u32)` 和 `struct Meters(u32)` 在逻辑形式上是与 u32 相同的，但是它们在类型系统是完全不一样的类型。即使两个 newtype 底层都是使用 u32，它们也不能互相替换，除非进行显式的类型转换。
+     * **切片 [T]:**
+     * - 切片是一个动态尺寸类型（Dynamically Sized Type, DST），它不存储任何有关其长度的信息。
+     * - 切片只是对一块连续内存的引用，其长度在使用时必须已知，但不是由切片本身直接存储的。
+     * 由于切片的长度不是在编译时已知的，所以不能单独作为一个值来存储；它通常通过某种形式的指针（如 &[T] 或 Box<[T]>）来使用，这些指针包含了长度信息。
      *
-     * 从三个方面来解释：
-     * - 自定义类型可以让我们给出更有意义和可读性的类型名，例如与其使用 u32 作为距离的单位类型，我们可以使用 Meters，它的可读性要好得多
-     * - 对于某些场景，只有 newtype 可以很好地解决
-     * - 隐藏内部类型的细节
+     * **向量 `Vec<T>`:**
+     * - `Vec<T>` 是一个固定尺寸类型，它在内部维护了一个指向堆上分配的数组的指针、当前向量的长度以及它的容量。这意味着 `Vec<T>` 总是知道自己包含多少元素，并且这些元素占用了多少内存空间。
+     * - `Vec<T>` 的这种设计使得它在运行时可以动态地增长或缩小，但其本身的大小（即存储指针、长度和容量的大小）在编译时是已知的。
      *
-     * #### 为外部类型实现外部特征
-     * > https://rustwiki.org/zh-CN/book/ch10-02-traits.html#%E4%B8%BA%E7%B1%BB%E5%9E%8B%E5%AE%9E%E7%8E%B0-trait
+     * 因此 Vec、String 和 HashMap 等数据类型，虽然底层数据可动态变化，但实际上这些底层数据只是保存在堆上，在栈中还存有一个引用类型，该引用包含了集合的内存地址、元素数目、分配空间信息，也就是类型本身就存储自身的大小信息。
+     *
+     * 总结来说，尽管 `Vec<T>` 可以动态地改变其存储的数据的大小，但它本身作为一个对象的大小是固定的，包括指向数据的指针、长度和容量。而切片 `[T]` 本身不存储这些信息，需要通过外部手段（如引用或智能指针）来管理这些数据，因此是一个动态尺寸类型。
+     * 
+     * *存储自身大小信息的类型**称为定长类型，反之称为非定长类型。
+     *
+     * > 小知识
      * > 
-     * > https://github.com/rtpacks/rust-note/blob/main/docs/unit%2018-Trait%20%E7%89%B9%E5%BE%81%EF%BC%88%E4%BA%8C%EF%BC%89.md#trait-%E4%BD%9C%E7%94%A8%E5%9F%9F%E5%AD%A4%E5%84%BF%E8%A7%84%E5%88%99
+     * > 在rust中，切片不可直接使用，所以一般将切片引用简化称为切片。
      *
-     * 在为类型实现trait中，提到过一个孤儿原则：如果你想要为类型 A 实现 Trait T，那么 A 或者 T 至少有一个是在**当前作用域中定义**的！也就是不能为外部类型实现外部 trait。
+     * #### str
+     * str 既不是 String 动态字符串，也不是 &str 字符串切片(切片引用)，而是一个字符串切片，是一个动态类型，是 String 和 `&str` 的底层数据类型。
      *
-     * 这是因为由于类型可以实现多个 Trait，而不同的 Trait 可能存在相同的方法名，因此类型实体调用 Trait 方法时，必须明确方法来自哪个 Trait，所以需要孤儿原则来保证调用明确的方法。
-     *
-     * 例如，如果想使用 `println!("{}", v)` 的方式去格式化输出一个动态数组 `Vec`，以期给用户提供更加清晰可读的内容，那么就需要为 Vec 实现 Display 特征。
-     * 但是这里有一个问题： `Vec` 类型定义在标准库中，`Display` 亦然，根据孤儿院则不能给外部类型实现外部特征，不能直接为 Vec 实现 Display 特征。
-     *
-     * 现在可以通过 newtype **定义新类型**来解决这个问题，定义一个元组结构体，通过 `.0` 访问原始类型数据：
+     * 由于 str 是动态类型，因此它的大小直到运行期才知道，所以要使用字符串切片引用（常称为字符串切片）：
      * ```rust
-     * struct Wrapper(Vec<String>);
-     *
-     * impl fmt::Display for Wrapper {
-     *     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-     *         write!(f, "[{}]", self.0.join(", ")) // 访问元组中的元素，即原始数据
-     *     }
-     * }
-     *
-     * let w = Wrapper(vec![String::from("hello"), String::from("world")]);
-     * println!("w = {}", w);
+     * // let s1: str = "Hello World!"; 字符串切片，是String和&str的底层数据类型，不可直接使用
+     * let s2: &str = "on?"; // 字符串切片引用
      * ```
      *
-     * 通过 newtype 形式定义新类型 `struct Wrapper(Vec<String>)` 后，就满足孤儿原则的当前作用域必须存在类型或特征要求。
+     * 之前提到过：**切片就是数据本身，不包含自身大小信息**，它可以在堆、栈、静态存储区。
+     * str（字符串切片）就是存储在静态存储区的一种**动态尺寸类型**，rust 通过 `&str` （字符串切片引用）管理 str。
+     * `&str`（字符串切片引用）存储在栈，属于定长类型，包含有实际数据的内存地址、长度等信息，常用**字符串切片**简化名称，易与真实的字符串切片混淆。
      *
-     * #### 更好的可读性及类型异化
-     * **更好的可读性不等于更少的代码**，但可读性的提升降低维护代码的难度。例如 `struct Millimeters(u32)` 和 `struct Meters(u32)` 在逻辑形式上是与 u32 相同的，但是它们在类型系统是完全不一样的，两个类型不允许直接相加。
-     *
-     * 如果需要两个类型实现相加操作，约定返回Millimeters，可以为其实现Add特征：
+     * #### 特征对象 trait object
+     * > https://github.com/rtpacks/rust-note/blob/main/docs/unit%2043-%E9%97%AD%E5%8C%85%20Closure%EF%BC%88%E4%B8%89%EF%BC%89%E5%BD%93%E9%97%AD%E5%8C%85%E4%BD%9C%E4%B8%BA%E5%87%BD%E6%95%B0%E5%8F%82%E6%95%B0%E6%88%96%E8%BF%94%E5%9B%9E%E5%80%BC%E6%97%B6%E6%AD%A3%E7%A1%AE%E6%A0%87%E6%B3%A8%E5%87%BD%E6%95%B0%E7%AD%BE%E5%90%8D.md#%E9%97%AD%E5%8C%85%E4%BD%9C%E4%B8%BA%E5%87%BD%E6%95%B0%E8%BF%94%E5%9B%9E%E5%80%BC
+     * 
+     * 与其他语言不同，rust的特征（类似接口）是不能直接作为类型使用的，因为很多类型都实现某个特征，即实现该特征的类型（特征对象 trait object）并不固定，意味着特征对象(trait object) 也是一个动态尺寸类型。
+     * 这很容里解释：Cat 和 Dog 都实现了 Speak，但是 Cat 和 Dog 的数据大小不相等，所以特征对象是一个动态尺寸类型。
      * ```rust
-     * // newtype实现可读性的提升
-     * struct Meters(u32);
-     * struct Millimeters(u32);
-     *
-     * // 解除Add默认只能使用相同类型的限制
-     * impl Add<Millimeters> for Meters {
-     *     type Output = Millimeters;
-     *     fn add(self, rhs: Millimeters) -> Millimeters {
-     *         Millimeters(self.0 * 1000 + rhs.0)
-     *     }
-     * }
-     *
-     * impl fmt::Display for Millimeters {
-     *     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-     *         write!(f, "{}mm", self.0)
-     *     }
-     * }
-     *
-     * let diff = Meters(3) + Millimeters(3000);
-     *
-     * println!("{}", diff); // 6000
+     * trait MyThing {};
+     * fn foo_1(thing: &dyn MyThing) {}     // OK
+     * fn foo_2(thing: Box<dyn MyThing>) {} // OK
+     * fn foo_3(thing: MyThing) {}          // ERROR!
      * ```
-     *
-     * #### 隐藏内部类型的细节
-     * Rust 的类型有很多自定义的方法，假如把某个类型传给了用户，又不想用户调用类型方法，就可以使用 newtype：
-     * ```rust
-     * struct Meters(u32);
-     * let i: u32 = 2;
-     * assert_eq!(i.pow(2), 4); // u32 具有 pow 方法
-     *
-     * let n = Meters(i);
-     * // assert_eq!(n.pow(2), 4); 错误，Meters(u32) 没有 pow 方法
-     * ```
-     *
-     * 虽然 newtype 能够隐藏方法，但是用户可以通过 `n.0.pow(2)` 的方式来绕过限制，并调用内部类型的方法：
-     * ```rust
-     * assert_eq!(i.pow(2), 4);
-     * ```
-     *
-     * ### 类型别名 TypeAlias
-     * 使用 newtype 可以创建新类型，也可以使用一个更传统的方式，用类型别名来创建**新的类型名称**：
-     * ```rust
-     * // 使用TypeAlias创建新的类型名称，与原有类型相等
-     * type MetersType = u32;
-     * type MillimetersType = u32;
-     * let diff1: MetersType = 3;
-     * let diff2: MillimetersType = 3000;
-     * println!("{}", diff1 * 1000 + diff2);
-     * ```
-     *
-     * **类型别名并不是一个独立的全新的类型，而是某一个类型的别名**，因此编译器依然会把类型别名视为原有类型。
-     *
-     * 与 newtype 的区别：
-     * - 类型别名只是别名，是为了让可读性更好，并不是全新的类型，而 newtype 是一个全新的类型
-     * - 类型别名无法实现为外部类型实现外部特征等功能，因为类型别名还是等于原有类型，而 newtype 可以
-     *
-     * 类型别名除了让类型可读性更好，还能**减少模版代码的使用**，在一些引用交叉类型的代码上：
-     * ```rust
-     * let f: Box<dyn Fn() + Send + 'static> = Box::new(|| println!("hi"));
-     *
-     * fn takes_long_type(f: Box<dyn Fn() + Send + 'static>) {}
-     * fn returns_long_type() -> Box<dyn Fn() + Send + 'static> {}
-     * ```
-     *
-     * f 是一个令人眼花缭乱的类型 `Box<dyn Fn() + Send + 'static>`，使用时标注非常的麻烦，此时就可以用类型别名来解决：
-     * ```rust
-     * type Thunk = Box<dyn Fn() + Send + 'static>;
-     *
-     * let f: Thunk = Box::new(|| println!("hi"));
-     * fn takes_long_type(f: Thunk) {}
-     * fn returns_long_type() -> Thunk {}
-     * ```
-     *
-     * 常用的 `std::io` 的 Result 也是经过类型别名简化的，它实际上是 `std::result::Result<T, std::io::Error>` 的别名
-     * ```rust
-     * type Result<T> = std::result::Result<T, std::io::Error>;
-     * ```
-     *
-     * 如果为了区分 `std::io` 和 `std::fmt` 的 Result 和 Error类型，同时简化模板代码，那可以使用类型别名来简化代码中 `std::io` 和 `std::fmt` 两者的 Result 和 Error：
-     * ```rust
-     * type IOError = std::io::Error;
-     * type FmtError = std::fmt::Error;
-     * type IOResult<T> = std::result::Result<T, IOError>;
-     * type FmtResult<T> = std::result::Result<T, FmtError>;
-     * ```
-     * **类型别名并不是一个独立的全新的类型，而是某一个类型的别名**，编译器依然会把类型别名视为原有类型，因此可以用类型别名来调用真实类型的所有方法。
-     *
-     * ### !永不返回类型
-     * 在 TypeScript 中有一个 `never` 类型，表示永不返回类型，永不返回类型可能发生在**函数运行异常**和**程序死循环**这两点上。
-     *
-     * rust 用 `!` 表示永不返回类型，它除了在函数运行异常和程序死循环外，还能用在 match 匹配中。
-     * 以下是一段错误代码，要赋值给 v，就必须保证 match 的各个分支返回的值是同一个类型，第一个分支返回数值、另一个分支返回元类型 ()，所以会出错。
-     * ```rust
-     * let i = 2;
-     * let v = match i {
-     *    0..=3 => i,
-     *    _ => println!("不合规定的值:{}", i)
-     * };
-     * ```
-     *
-     * 可以用 `!` 永不返回类型解决这个问题，panic 的返回值是 !，代表它决不会返回任何值，既然没有任何返回值，那自然不会存在分支类型不匹配的情况。
-     * ```rust
-     * let i = 2;
-     * let v = match i {
-     *    0..=3 => i,
-     *    _ => panic!("不合规定的值:{}", i)
-     * };
-     * ```
+     * 在闭包章节中提到过函数无法实现非固定大小的数据类型，需要使用特征对象的 `Box<dyn Fn(i32) -> i32>` 正确标注闭包作为返回值，就是因为特征对象 `dyn trait | trait object` 是一个动态尺寸类型，无法直接使用。
+     * 
+     * 总结：只能间接使用的 DST，Rust 中常见的 DST 类型有: `str`、`[T]`、`dyn trait | trait object`，它们都无法单独被使用，必须要通过引用或 Box 来间接使用。
      *
      */
 
-    //  newtype 使用元组结构体快速构建新类型，解决孤儿原则的限制
-    struct Wrapper(Vec<String>);
+    let array = [1, 2, 3];
+    // let slice = array[..2]; 这是错误的，因为切片是一个动态大小的数据，因此只能存放在堆中，并不能直接使用
+    //
+    let slice = &array[..2];
 
-    impl Display for Wrapper {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "[{}]", self.0.join(","))
-        }
-    }
-
-    let w = Wrapper(vec![String::from("Hello"), String::from("World")]);
-    println!("{w}");
-
-    // newtype实现可读性的提升
-    struct Meters(u32);
-    struct Millimeters(u32);
-
-    // 解除Add默认只能使用相同类型的限制
-    impl Add<Millimeters> for Meters {
-        type Output = Millimeters;
-        fn add(self, rhs: Millimeters) -> Millimeters {
-            Millimeters(self.0 * 1000 + rhs.0)
-        }
-    }
-
-    impl fmt::Display for Millimeters {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}mm", self.0)
-        }
-    }
-
-    let diff = Meters(3) + Millimeters(3000);
-
-    println!("{}", diff); // 6000
-
-    // 可以绕过类型限制，调用原有数据类型的方法
-    Meters(2).0.pow(2);
-
-    // 使用TypeAlias创建新的类型名称，与原有类型相等
-    type MetersType = u32;
-    type MillimetersType = u32;
-    let diff1: MetersType = 3;
-    let diff2: MillimetersType = 3000;
-    println!("{}", diff1 * 1000 + diff2);
-
-    // 类型别名提升可读性和减少冗长的类型模板代码
-    // 类型模板代码 std::result::Result<T, std::io::Error>
-    type IOError = std::io::Error;
-    type FmtError = std::fmt::Error;
-    type IOResult<T> = std::result::Result<T, IOError>;
-    type FmtResult<T> = std::result::Result<T, FmtError>;
-
-    // 永不返回的类型 !
-    let i = 2;
-    let x = 1..2;
-    let x = 1..=2;
-    let v = match i {
-        0..=2 => i,
-        _ => panic!("不符合规定的值 {i}"),
-    };
+    println!("{:p}, {:p}", &&array, slice);
 }
