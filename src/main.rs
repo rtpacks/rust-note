@@ -107,8 +107,17 @@ fn main() {
      * ```rust
      * let box_str: Box<str> = "Hello World".into(); // 标注接收者类型+into方法，实现编译器自动转换类型
      * ```
-     *
      * into 方法是一个强大的方法，一些不能手动转换使用的类型，可以通过标注接收者类型和into方法，实现让编译器自动转换类型。
+     *
+     * **正确标注接收者类型 + into 方法 = 类型自由**
+     *
+     * ```rust
+     * let s: String = "Hello World".into();
+     * let s: String = "Hello".into();
+     * let s: String = 'c'.into();
+     * let n: i32 = 88u8.into();
+     * ```
+     *
      */
 
     let array = [1, 2, 3];
@@ -122,4 +131,8 @@ fn main() {
     let s2: &str = "on?"; // 字符串切片引用
 
     let box_str: Box<str> = "x".into(); // into 方法是一个强大的方法，一些不能手动转换使用的类型，可以通过标注接收者类型和into方法，实现让编译器自动转换类型。
+
+    let s: String = "Hello".into();
+    let s: String = 'c'.into();
+    let n: i32 = 88u8.into();
 }
