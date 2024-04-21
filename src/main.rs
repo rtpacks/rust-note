@@ -1,5 +1,8 @@
 use core::fmt;
 use ilearn::{run, Config};
+use num::FromPrimitive;
+use num_derive::FromPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::{
     fmt::{Debug, Display},
     ops::{Add, Index},
@@ -7,132 +10,201 @@ use std::{
 
 fn main() {
     /*
-     * ## 不定长类型 DST 和定长类型 Sized
+     * ## 整数与枚举
+     * 在 Rust 中，从枚举到整数的转换很容易，但是反过来，就没那么容易，甚至部分实现还挺不安全, 例如使用transmute。
      *
-     * 在 Rust 中类型有多种抽象的分类方式，如按照传统数据结构划分：基本类型、集合类型、复合类型等。如果从编译器何时能获知类型大小的角度出发，可以分成两类:
-     * - 定长类型( sized )，这些类型的大小在编译时是已知的，实现了 trait Sized。
-     * - 不定长类型( unsized )，与定长类型相反，它的大小只有到了**程序运行时**才能动态获知，这种类型又被称之动态大小类型/动态尺寸类型(dynamically sized type)（DST），或者非正式地称为非固定尺寸类型(unsized type)。切片和 trait对象是 DSTs 的两个例子。
+     * 在实际场景中，从整数到枚举的转换有时还是非常需要的，例如为了可读性，有一个枚举类型，然后需要从外面传入一个整数，用于控制后续的流程走向，此时就需要用整数去匹配相应的枚举。
      *
-     * ### 动态大小类型 DST
-     * **动态大小类型/动态尺寸类型(dynamically sized type)（DST），指的类型大小不确定，而不是指数据大小不确定**。
-     *
-     * 不能简单的将变量与类型视为只是一块栈内存或一块堆内存数据，比如 Vec 类型，rust将其分成两部分数据：存储在堆中的实际类型数据与存储在栈上的管理信息数据。
-     * 其中存储在栈上的管理信息数据是引用类型，包含实际类型数据的地址、元素的数量，分配的空间等信息，**rust 通过栈上的管理信息数据掌控实际类型数据的信息**。
-     * 这种**存储自身大小信息的类型**就可以称为定长类型（固定尺寸）。
-     *
-     * 反过来，不存储自身大小信息的就被称为动态尺寸类型（DST），如切片 `[T]` 与 特征对象 `trait object`。
-     * 以切片为例，**切片就是数据本身，不包含自身大小信息**，它可以在堆、栈、静态存储区，写作 `[T]`，常见的支持切片的类型有String类型、Array类型和Vec类型。
-     * 在 https://www.cnblogs.com/88223100/p/Rust-memory-distribution.html 中有切片的 rust 内存分布，可以清楚的看到切片 `[T]` 就是原始数据本身的一部分，**没有存储自身大小的信息**。
-     * 所以在使用切片时，需要通过外部手段（如引用或智能指针）来管理长度信息，如胖指针包含了两份元数据：**指向源数据中切片起点元素的指针和切片数据中包含的元素数量(切片的长度)**。
-     * 这种**不存储自身大小信息的类型**就是动态尺寸类型（DST）。
-     *
-     * **切片 [T]:**
-     * - 切片是一个动态尺寸类型（Dynamically Sized Type, DST），它不存储任何有关其长度的信息。
-     * - 切片只是对一块连续内存的引用，其长度在使用时必须已知，但不是由切片本身直接存储的。
-     * 由于切片的长度不是在编译时已知的，所以不能单独作为一个值来存储；它通常通过某种形式的指针（如 &[T] 或 Box<[T]>）来使用，这些指针包含了长度信息。
-     *
-     * **向量 `Vec<T>`:**
-     * - `Vec<T>` 是一个固定尺寸类型，它在内部维护了一个指向堆上分配的数组的指针、当前向量的长度以及它的容量。这意味着 `Vec<T>` 总是知道自己包含多少元素，并且这些元素占用了多少内存空间。
-     * - `Vec<T>` 的这种设计使得它在运行时可以动态地增长或缩小，但其本身的大小（即存储指针、长度和容量的大小）在编译时是已知的。
-     *
-     * 因此 Vec、String 和 HashMap 等数据类型，虽然底层数据可动态变化，但实际上这些底层数据只是保存在堆上，在栈中还存有一个引用类型，该引用包含了集合的内存地址、元素数目、分配空间信息，也就是类型本身就存储自身的大小信息。
-     *
-     * 总结来说，尽管 `Vec<T>` 可以动态地改变其存储的数据的大小，但它本身作为一个对象的大小是固定的，包括指向数据的指针、长度和容量。而切片 `[T]` 本身不存储这些信息，需要通过外部手段（如引用或智能指针）来管理这些数据，因此是一个动态尺寸类型。
-     *
-     * *存储自身大小信息的类型**称为定长类型，反之称为非定长类型。
-     *
-     * > 小知识
-     * >
-     * > 在rust中，切片不可直接使用，所以一般将切片引用简化称为切片。
-     *
-     * #### str
-     * str 既不是 String 动态字符串，也不是 &str 字符串切片(切片引用)，而是一个字符串切片，是一个动态类型，是 String 和 `&str` 的底层数据类型。
-     *
-     * 由于 str 是动态类型，因此它的大小直到运行期才知道，所以要使用字符串切片引用（常称为字符串切片）：
+     * ### 手动匹配
+     * 为了实现这个需求，不要求**数字转换枚举**，可以利用**枚举容易转换数字**的特性进行匹配：
      * ```rust
-     * // let s1: str = "Hello World!"; 字符串切片，是String和&str的底层数据类型，不可直接使用
-     * let s2: &str = "on?"; // 字符串切片引用
+     * enum Status {
+     *     INIT = 0,
+     *     RUNNING = 1,
+     *     SUCCESS = 2,
+     *     ERROR = 3,
+     * }
+     *
+     * let status = 2u8;
+     * let status_enum = match status {
+     *     _ if status == Status::INIT as u8 => Some(Status::INIT),
+     *     _ if status == Status::RUNNING as u8 => Some(Status::RUNNING),
+     *     _ if status == Status::SUCCESS as u8 => Some(Status::SUCCESS),
+     *     _ if status == Status::ERROR as u8 => Some(Status::ERROR),
+     *     _ => None,
+     * };
+     *
+     * // 与上面的写法是一样的，只不过多了一个内部变量
+     * let status_enum = match status {
+     *     x if x == Status::INIT as u8 => Some(Status::INIT),
+     *     x if x == Status::RUNNING as u8 => Some(Status::RUNNING),
+     *     x if x == Status::SUCCESS as u8 => Some(Status::SUCCESS),
+     *     x if x == Status::ERROR as u8 => Some(Status::ERROR),
+     *     _ => None,
+     * };
      * ```
      *
-     * 之前提到过：**切片就是数据本身，不包含自身大小信息**，它可以在堆、栈、静态存储区。
-     * str（字符串切片）就是存储在静态存储区的一种**动态尺寸类型**，rust 通过 `&str` （字符串切片引用）管理 str。
-     * `&str`（字符串切片引用）存储在栈，属于定长类型，包含有实际数据的内存地址、长度等信息，常用**字符串切片**简化名称，易与真实的字符串切片混淆。
-     *
-     * #### 特征对象 trait object
-     * > https://github.com/rtpacks/rust-note/blob/main/docs/unit%2043-%E9%97%AD%E5%8C%85%20Closure%EF%BC%88%E4%B8%89%EF%BC%89%E5%BD%93%E9%97%AD%E5%8C%85%E4%BD%9C%E4%B8%BA%E5%87%BD%E6%95%B0%E5%8F%82%E6%95%B0%E6%88%96%E8%BF%94%E5%9B%9E%E5%80%BC%E6%97%B6%E6%AD%A3%E7%A1%AE%E6%A0%87%E6%B3%A8%E5%87%BD%E6%95%B0%E7%AD%BE%E5%90%8D.md#%E9%97%AD%E5%8C%85%E4%BD%9C%E4%B8%BA%E5%87%BD%E6%95%B0%E8%BF%94%E5%9B%9E%E5%80%BC
-     *
-     * 与其他语言不同，rust的特征（类似接口）是不能直接作为类型使用的，因为很多类型都实现某个特征，即实现该特征的类型（特征对象 trait object）并不固定，意味着特征对象(trait object) 也是一个动态尺寸类型。
-     * 这很容里解释：Cat 和 Dog 都实现了 Speak，但是 Cat 和 Dog 的数据大小不相等，所以特征对象是一个动态尺寸类型。
+     * ### 使用三方库
+     * 在手动匹配中，是没有实现**数字转换枚举**流程的，可以使用第三方库 `num-traits` 和 `num-derive` 来实现这个过程：
      * ```rust
-     * trait MyThing {};
-     * fn foo_1(thing: &dyn MyThing) {}     // OK
-     * fn foo_2(thing: Box<dyn MyThing>) {} // OK
-     * fn foo_3(thing: MyThing) {}          // ERROR!
+     * use num_derive::FromPrimitive;
+     *
+     * // 使用第三方库实现
+     * #[derive(FromPrimitive)]
+     * enum Status2 {
+     *     INIT = 1,
+     *     RUNNING,
+     *     SUCCESS,
+     *     ERROR,
+     * }
+     *
+     * match FromPrimitive::from_u8(status) {
+     *     Some(Status2::INIT) => println!("INIT"),
+     *     _ => println!("NOT INIT"),
+     * };
      * ```
-     * 在闭包章节中提到过函数无法实现非固定大小的数据类型，需要使用特征对象的 `Box<dyn Fn(i32) -> i32>` 正确标注闭包作为返回值，就是因为特征对象 `dyn trait | trait object` 是一个动态尺寸类型，无法直接使用。
-     *
-     * 总结：只能间接使用的 DST，Rust 中常见的 DST 类型有: `str`、`[T]`、`dyn trait | trait object`，它们都无法单独被使用，必须要通过引用或 Box 来间接使用。
-     *
-     * ### Sized 定长类型
-     * 在 rust 编写泛型代码，编译器会自动加上了 Sized 特征约束，表示泛型只能用于一切实现了 Sized 特征的类型上，而**所有在编译时就能知道其大小的类型，都会自动实现 Sized 特征**。
-     *
-     * 除 `slice | trait object` 外，基本上所有的类型都实现了 Sized 特征。
+     * 使用第三方库后，可以无需手动转换，使用Optional即可完成匹配。另外还可以使用一个较新的库: num_enums：
      * ```rust
-     * fn generic<T>(t: T) {}
-     * fn generic<T: Sized>(t: T) {} // 编译器自动加上 Sized 特征约束
-     * ```
-     * **每一个特征都是一个可以通过名称来引用的动态大小类型**。因此如果想把特征作为具体的类型来传递给函数，必须将其转换成一个特征对象：诸如 `&dyn Trait` 或者 `Box<dyn Trait>` (还有 `Rc<dyn Trait>`)这些引用类型。
+     * use num_enum::{IntoPrimitive, TryFromPrimitive};
      *
-     * 假如想在泛型函数中使用动态数据类型怎么办？可以使用 `?Sized` 特征。
-     * **?Sized 特征用于表明类型 T 既有可能是固定大小的类型，也可能是动态大小的类型**。
-     * 还有一点要注意的是，函数参数类型从 T 变成了 &T，因为 T 可能是动态大小的，因此需要用一个固定大小的指针(引用)来包裹它：
-     * ```rust
-     * fn generic<T: ?Sized>(t: &T) {}
-     * ```
+     * #[derive(TryFromPrimitive, IntoPrimitive)]
+     * #[repr(u8)]
+     * enum Status3 {
+     *     INIT = 1,
+     *     RUNNING,
+     *     SUCCESS,
+     *     ERROR,
+     * }
      *
-     * ### Box<str>
-     * > https://course.rs/advance/into-types/sized.html#boxstr
-     *
-     * 使用 Box 可以将一个动态大小的特征变成一个拥有特征对象的固定大小类型，能否故技重施，将 str 封装成一个固定大小类型？
-     *
-     * 而如何把一个动态大小类型转换成固定大小的类型？使用引用指向这些动态数据，然后在引用中存储相关的内存位置、长度等信息即可。
-     *
-     * ```rust
-     * let box_str: Box<str> = Box::new("Hello World" as str);
-     * ```
-     * 很明显上面的代码会报错，因为 str 是一个非定长类型，rust 不允许直接使用非定常类型。这意味着**不可能存在手动转换并使用非定长类型的数据的方式**。
-     *
-     * 手动方式不允许，还有编译器自动转换。回忆在闭包章节中使用 `collect` 方法，可以通过在变量接收者上标注类型实现让编译器自动转换类型，借助这个特性，使用 `into` 方法让编译器自动转换：
-     *
-     * ```rust
-     * let box_str: Box<str> = "Hello World".into(); // 标注接收者类型+into方法，实现编译器自动转换类型
-     * ```
-     * into 方法是一个强大的方法，一些不能手动转换使用的类型，可以通过标注接收者类型和into方法，实现让编译器自动转换类型。
-     *
-     * **正确标注接收者类型 + into 方法 = 类型自由**
-     *
-     * ```rust
-     * let s: String = "Hello World".into();
-     * let s: String = "Hello".into();
-     * let s: String = 'c'.into();
-     * let n: i32 = 88u8.into();
+     * let num: u8 = Status3::INIT.try_into().expect("转换失败"); // 枚举转换为数字
+     * let enum_item = Status3::try_from(2u8).expect("转换失败"); // 数字转换为枚举
      * ```
      *
+     * ### TryFrom 特征
+     * 如果不希望使用第三方库，自己也可以使用TryFrom实现转换逻辑。
+     *
+     * ```rust
+     * // 使用TryFrom实现转换逻辑，将给定的数据结合给定的类型，使用TryFrom特征定义的逻辑进行转换
+     * #[derive(Debug)]
+     * enum Status4 {
+     *     INIT = 1,
+     *     RUNNING,
+     *     SUCCESS,
+     *     ERROR,
+     * }
+     * impl TryFrom<i32> for Status4 {
+     *     type Error = ();
+     *     fn try_from(value: i32) -> Result<Self, Self::Error> {
+     *         let result = match value {
+     *             x if x == Status4::INIT as i32 => Ok(Status4::INIT),
+     *             x if x == Status4::RUNNING as i32 => Ok(Status4::RUNNING),
+     *             x if x == Status4::SUCCESS as i32 => Ok(Status4::SUCCESS),
+     *             x if x == Status4::ERROR as i32 => Ok(Status4::ERROR),
+     *             _ => Err(()),
+     *         };
+     *         result
+     *     }
+     * }
+     *
+     * let enum_num = 2;
+     * match enum_num.try_into() {
+     *     Ok(Status4::INIT) => println!("INIT"),
+     *     _ => println!("NOT INIT"),
+     * }
+     * ```
+     *
+     * 为枚举实现TryFrom特征，i32使用try_into方法，try_into调用的是目标类型的TryFrom特征逻辑，再一次应证了rust强大的类型系统，它可以使用上下文信息，以进行转换。
+     *
+     * **标注合适的类型 + try_into方法 = 类型自由**
+     * 
+     * 上面还有一个问题，需要为每个类型都定义一遍匹配分支，可以使用宏来解决这个问题：https://course.rs/advance/into-types/enum-int.html#tryfrom--%E5%AE%8F
+     *
+     * ### std::mem::transmute
+     * 这个方法原则上并不推荐，但是有其存在的意义，如果要使用，需要清晰的知道自己为什么使用，这属于 unsafe 代码。
+     * 
+     * 阅读：https://course.rs/advance/into-types/enum-int.html#%E9%82%AA%E6%81%B6%E4%B9%8B%E7%8E%8B-stdmemtransmute
+     *
+     * ### 总结
+     * 枚举非常容易转化成数字，但是数字不容易转换成枚举。可以利用枚举容易转化成数字特性来实现枚举与数字的匹配。
      */
 
-    let array = [1, 2, 3];
-    // let slice = array[..2]; 这是错误的，因为切片是一个动态大小的数据，因此只能存放在堆中，并不能直接使用
-    //
-    let slice = &array[..2];
+    enum Status {
+        INIT = 0,
+        RUNNING = 1,
+        SUCCESS = 2,
+        ERROR = 3,
+    }
 
-    println!("{:p}, {:p}", &&array, slice);
+    let status = 2u8;
+    let status_enum = match status {
+        _ if status == Status::INIT as u8 => Some(Status::INIT),
+        _ if status == Status::RUNNING as u8 => Some(Status::RUNNING),
+        _ if status == Status::SUCCESS as u8 => Some(Status::SUCCESS),
+        _ if status == Status::ERROR as u8 => Some(Status::ERROR),
+        _ => None,
+    };
+    // 与上面的写法是一样的，只不过多了一个内部变量
+    let status_enum = match status {
+        x if x == Status::INIT as u8 => Some(Status::INIT),
+        x if x == Status::RUNNING as u8 => Some(Status::RUNNING),
+        x if x == Status::SUCCESS as u8 => Some(Status::SUCCESS),
+        x if x == Status::ERROR as u8 => Some(Status::ERROR),
+        _ => None,
+    };
 
-    // let s1: str = "Hello World!"; 字符串切片，是String和&str的底层数据类型，不可直接使用
-    let s2: &str = "on?"; // 字符串切片引用
+    // 使用第三方库实现
+    #[derive(FromPrimitive)]
+    enum Status2 {
+        INIT = 1,
+        RUNNING,
+        SUCCESS,
+        ERROR,
+    }
 
-    let box_str: Box<str> = "x".into(); // into 方法是一个强大的方法，一些不能手动转换使用的类型，可以通过标注接收者类型和into方法，实现让编译器自动转换类型。
+    match FromPrimitive::from_u8(status) {
+        Some(Status2::INIT) => println!("INIT"),
+        _ => println!("NOT INIT"),
+    };
 
-    let s: String = "Hello".into();
-    let s: String = 'c'.into();
-    let n: i32 = 88u8.into();
+    #[derive(TryFromPrimitive, IntoPrimitive)]
+    #[repr(u8)]
+    enum Status3 {
+        INIT = 1,
+        RUNNING,
+        SUCCESS,
+        ERROR,
+    }
+    // 枚举转换为数字
+    let num: u8 = Status3::INIT.try_into().expect("转换失败");
+    // 数字转换为枚举
+    let enum_item = Status3::try_from(2u8).expect("转换失败");
+
+    // 使用TryFrom实现转换逻辑，将给定的数据结合给定的类型，使用TryFrom特征定义的逻辑进行转换
+    // 为枚举实现TryFrom特征，i32使用try_into方法，try_into调用的是目标类型的TryFrom特征逻辑，再一次应证了rust强大的类型系统，它可以使用上下文信息，以进行转换
+    #[derive(Debug)]
+    enum Status4 {
+        INIT = 1,
+        RUNNING,
+        SUCCESS,
+        ERROR,
+    }
+    impl TryFrom<i32> for Status4 {
+        type Error = ();
+        fn try_from(value: i32) -> Result<Self, Self::Error> {
+            let result = match value {
+                x if x == Status4::INIT as i32 => Ok(Status4::INIT),
+                x if x == Status4::RUNNING as i32 => Ok(Status4::RUNNING),
+                x if x == Status4::SUCCESS as i32 => Ok(Status4::SUCCESS),
+                x if x == Status4::ERROR as i32 => Ok(Status4::ERROR),
+                _ => Err(()),
+            };
+            result
+        }
+    }
+
+    let enum_num = 2;
+    match enum_num.try_into() {
+        Ok(Status4::INIT) => println!("INIT"),
+        _ => println!("NOT INIT"),
+    }
 }
