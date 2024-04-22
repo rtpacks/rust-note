@@ -10,201 +10,42 @@ use std::{
 
 fn main() {
     /*
-     * ## 整数与枚举
-     * 在 Rust 中，从枚举到整数的转换很容易，但是反过来，就没那么容易，甚至部分实现还挺不安全, 例如使用transmute。
+     * ## 智能指针（一）
      *
-     * 在实际场景中，从整数到枚举的转换有时还是非常需要的，例如为了可读性，有一个枚举类型，然后需要从外面传入一个整数，用于控制后续的流程走向，此时就需要用整数去匹配相应的枚举。
+     * 在各个编程语言中，指针的概念几乎都是相同的：**指针是一个包含了内存地址的变量，该内存地址引用或者指向了另外的数据**。
      *
-     * ### 手动匹配
-     * 为了实现这个需求，不要求**数字转换枚举**，可以利用**枚举容易转换数字**的特性进行匹配：
-     * ```rust
-     * enum Status {
-     *     INIT = 0,
-     *     RUNNING = 1,
-     *     SUCCESS = 2,
-     *     ERROR = 3,
-     * }
+     * 在 Rust 中，最常见的指针类型是引用，通过 `&` 符号表示。不同于其它语言，引用在 Rust 中被赋予了更深层次的含义：**借用其它变量的值**。
+     * 引用本身很简单，除了指向某个值外并没有其它的功能，也不会造成性能上的额外损耗，因此是 Rust 中使用最多的指针类型。
      *
-     * let status = 2u8;
-     * let status_enum = match status {
-     *     _ if status == Status::INIT as u8 => Some(Status::INIT),
-     *     _ if status == Status::RUNNING as u8 => Some(Status::RUNNING),
-     *     _ if status == Status::SUCCESS as u8 => Some(Status::SUCCESS),
-     *     _ if status == Status::ERROR as u8 => Some(Status::ERROR),
-     *     _ => None,
-     * };
+     * 智能指针虽然也号称指针(胖指针)，但是它是一个复杂的数据类型：**通过比引用更复杂的数据结构，包含比引用更多的信息**，例如元数据，当前长度，最大可用长度等。在 C++ 或者其他语言中也存在智能指针相似的概念。
      *
-     * // 与上面的写法是一样的，只不过多了一个内部变量
-     * let status_enum = match status {
-     *     x if x == Status::INIT as u8 => Some(Status::INIT),
-     *     x if x == Status::RUNNING as u8 => Some(Status::RUNNING),
-     *     x if x == Status::SUCCESS as u8 => Some(Status::SUCCESS),
-     *     x if x == Status::ERROR as u8 => Some(Status::ERROR),
-     *     _ => None,
-     * };
-     * ```
-     *
-     * ### 使用三方库
-     * 在手动匹配中，是没有实现**数字转换枚举**流程的，可以使用第三方库 `num-traits` 和 `num-derive` 来实现这个过程：
-     * ```rust
-     * use num_derive::FromPrimitive;
-     *
-     * // 使用第三方库实现
-     * #[derive(FromPrimitive)]
-     * enum Status2 {
-     *     INIT = 1,
-     *     RUNNING,
-     *     SUCCESS,
-     *     ERROR,
-     * }
-     *
-     * match FromPrimitive::from_u8(status) {
-     *     Some(Status2::INIT) => println!("INIT"),
-     *     _ => println!("NOT INIT"),
-     * };
-     * ```
-     * 使用第三方库后，可以无需手动转换，使用Optional即可完成匹配。另外还可以使用一个较新的库: num_enums：
-     * ```rust
-     * use num_enum::{IntoPrimitive, TryFromPrimitive};
-     *
-     * #[derive(TryFromPrimitive, IntoPrimitive)]
-     * #[repr(u8)]
-     * enum Status3 {
-     *     INIT = 1,
-     *     RUNNING,
-     *     SUCCESS,
-     *     ERROR,
-     * }
-     *
-     * let num: u8 = Status3::INIT.try_into().expect("转换失败"); // 枚举转换为数字
-     * let enum_item = Status3::try_from(2u8).expect("转换失败"); // 数字转换为枚举
-     * ```
-     *
-     * ### TryFrom 特征
-     * 如果不希望使用第三方库，自己也可以使用TryFrom实现转换逻辑。
+     * 前面提到过：
+     * 不能简单的将变量与类型视为只是一块栈内存或一块堆内存数据，比如 Vec 类型，rust将其分成两部分数据：存储在堆中的实际类型数据与存储在栈上的管理信息数据。
+     * 其中存储在栈上的管理信息数据是引用类型，包含实际类型数据的地址、元素的数量，分配的空间等信息，**rust 通过栈上的管理信息数据掌控实际类型数据的信息**。
      *
      * ```rust
-     * // 使用TryFrom实现转换逻辑，将给定的数据结合给定的类型，使用TryFrom特征定义的逻辑进行转换
-     * #[derive(Debug)]
-     * enum Status4 {
-     *     INIT = 1,
-     *     RUNNING,
-     *     SUCCESS,
-     *     ERROR,
-     * }
-     * impl TryFrom<i32> for Status4 {
-     *     type Error = ();
-     *     fn try_from(value: i32) -> Result<Self, Self::Error> {
-     *         let result = match value {
-     *             x if x == Status4::INIT as i32 => Ok(Status4::INIT),
-     *             x if x == Status4::RUNNING as i32 => Ok(Status4::RUNNING),
-     *             x if x == Status4::SUCCESS as i32 => Ok(Status4::SUCCESS),
-     *             x if x == Status4::ERROR as i32 => Ok(Status4::ERROR),
-     *             _ => Err(()),
-     *         };
-     *         result
-     *     }
-     * }
-     *
-     * let enum_num = 2;
-     * match enum_num.try_into() {
-     *     Ok(Status4::INIT) => println!("INIT"),
-     *     _ => println!("NOT INIT"),
-     * }
+     * let v = vec![1, 2, 3];
+     * let vp = &v;
+     * println!("{:p}, {:p}", &v, &vp);
      * ```
+     * 上面的案例中 `v` 栈内存存储就是一个智能指针（胖指针），通过 `println!("{:p}", &v)` 可获取指针信息。
      *
-     * 为枚举实现TryFrom特征，i32使用try_into方法，try_into调用的是目标类型的TryFrom特征逻辑，再一次应证了rust强大的类型系统，它可以使用上下文信息，以进行转换。
+     * 功能上，引用在rust中被赋予更深的含义：借用其它变量的值，而智能指针比引用更强大：
+     * - 提供比引用更多的功能特性，例如引用计数智能指针，该智能指针允许你同时拥有同一个数据的多个所有权，它会跟踪每一个所有者并进行计数，当所有的所有者都归还后，该智能指针及指向的数据将自动被清理释放。
+     * - 提供比引用更多的服务特性，引用仅仅是借用了数据，而智能指针往往可以拥有它们指向的数据，然后再为其它人提供服务。例如动态字符串 String 和动态数组 Vec，它们的数据结构中不仅仅包含了指向底层数据的指针，还包含了当前长度、最大长度等信息，其中 String 智能指针还提供了一种担保信息：所有的数据都是合法的 UTF-8 格式。
      *
-     * **标注合适的类型 + try_into方法 = 类型自由**
+     * 智能指针往往是基于结构体实现，它与自定义的结构体最大的区别在于它实现了 Deref 和 Drop 特征：
+     * - Deref 可以让**智能指针像引用那样工作**，这样你就可以写出同时支持智能指针和引用的代码，例如 `*T`。正如 Index 特征，可以为自定义结构体实现 Index 特征，然后可以使用 `[number]` 操作。
+     * - Drop 允许你指定智能指针超出作用域后自动执行的代码，例如做一些数据清除等收尾工作。
      * 
-     * 上面还有一个问题，需要为每个类型都定义一遍匹配分支，可以使用宏来解决这个问题：https://course.rs/advance/into-types/enum-int.html#tryfrom--%E5%AE%8F
-     *
-     * ### std::mem::transmute
-     * 这个方法原则上并不推荐，但是有其存在的意义，如果要使用，需要清晰的知道自己为什么使用，这属于 unsafe 代码。
+     * 智能指针在 Rust 中很常见，几个最常用、最有代表性的智能指针：
+     * - `Box<T>`，可以将值分配到堆上
+     * - `Rc<T>`，引用计数类型，允许多所有权存在
+     * - `Ref<T>` 和 `RefMut<T>`，允许将借用规则检查从编译期移动到运行期进行
      * 
-     * 阅读：https://course.rs/advance/into-types/enum-int.html#%E9%82%AA%E6%81%B6%E4%B9%8B%E7%8E%8B-stdmemtransmute
-     *
-     * ### 总结
-     * 枚举非常容易转化成数字，但是数字不容易转换成枚举。可以利用枚举容易转化成数字特性来实现枚举与数字的匹配。
      */
 
-    enum Status {
-        INIT = 0,
-        RUNNING = 1,
-        SUCCESS = 2,
-        ERROR = 3,
-    }
-
-    let status = 2u8;
-    let status_enum = match status {
-        _ if status == Status::INIT as u8 => Some(Status::INIT),
-        _ if status == Status::RUNNING as u8 => Some(Status::RUNNING),
-        _ if status == Status::SUCCESS as u8 => Some(Status::SUCCESS),
-        _ if status == Status::ERROR as u8 => Some(Status::ERROR),
-        _ => None,
-    };
-    // 与上面的写法是一样的，只不过多了一个内部变量
-    let status_enum = match status {
-        x if x == Status::INIT as u8 => Some(Status::INIT),
-        x if x == Status::RUNNING as u8 => Some(Status::RUNNING),
-        x if x == Status::SUCCESS as u8 => Some(Status::SUCCESS),
-        x if x == Status::ERROR as u8 => Some(Status::ERROR),
-        _ => None,
-    };
-
-    // 使用第三方库实现
-    #[derive(FromPrimitive)]
-    enum Status2 {
-        INIT = 1,
-        RUNNING,
-        SUCCESS,
-        ERROR,
-    }
-
-    match FromPrimitive::from_u8(status) {
-        Some(Status2::INIT) => println!("INIT"),
-        _ => println!("NOT INIT"),
-    };
-
-    #[derive(TryFromPrimitive, IntoPrimitive)]
-    #[repr(u8)]
-    enum Status3 {
-        INIT = 1,
-        RUNNING,
-        SUCCESS,
-        ERROR,
-    }
-    // 枚举转换为数字
-    let num: u8 = Status3::INIT.try_into().expect("转换失败");
-    // 数字转换为枚举
-    let enum_item = Status3::try_from(2u8).expect("转换失败");
-
-    // 使用TryFrom实现转换逻辑，将给定的数据结合给定的类型，使用TryFrom特征定义的逻辑进行转换
-    // 为枚举实现TryFrom特征，i32使用try_into方法，try_into调用的是目标类型的TryFrom特征逻辑，再一次应证了rust强大的类型系统，它可以使用上下文信息，以进行转换
-    #[derive(Debug)]
-    enum Status4 {
-        INIT = 1,
-        RUNNING,
-        SUCCESS,
-        ERROR,
-    }
-    impl TryFrom<i32> for Status4 {
-        type Error = ();
-        fn try_from(value: i32) -> Result<Self, Self::Error> {
-            let result = match value {
-                x if x == Status4::INIT as i32 => Ok(Status4::INIT),
-                x if x == Status4::RUNNING as i32 => Ok(Status4::RUNNING),
-                x if x == Status4::SUCCESS as i32 => Ok(Status4::SUCCESS),
-                x if x == Status4::ERROR as i32 => Ok(Status4::ERROR),
-                _ => Err(()),
-            };
-            result
-        }
-    }
-
-    let enum_num = 2;
-    match enum_num.try_into() {
-        Ok(Status4::INIT) => println!("INIT"),
-        _ => println!("NOT INIT"),
-    }
+    let v = vec![1, 2, 3];
+    let vp = &v;
+    println!("{:p}, {:p}, {:p}", v.as_ptr(), &v, &vp);
 }
