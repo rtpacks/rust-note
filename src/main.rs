@@ -2,7 +2,7 @@ use ilearn::{run, Config};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::{
     fmt::{Debug, Display},
-    ops::{Add, Index},
+    ops::{Add, Deref, Index},
 };
 
 fn main() {
@@ -30,16 +30,106 @@ fn main() {
      * // println!("{}", x == y); 在标准比较或赋值中，rust不会自动应用解引用，因此不能直接比较
      * println!("{}, {}, {}", x, y, *y); // 可以自动解引用
      * ```
-     * 
+     *
      * ### 智能指针解引用
      * 常规指针的解引用与大多数语言并无区别，但 Rust 的解引用功能更为丰富，Rust 将其提升到了一个新高度。
+     *
+     * 考虑一下智能指针，它是一个结构体类型，如果直接对它进行解引用 `*myStruct`，显然编译器不知道该如何解析。为了避免复杂的人工转换，rust 为智能指针结构体设计了 Deref 特征。
+     *
+     * 实现 Deref 后的智能指针结构体，就可以像普通引用一样，通过 `*` 进行解引用，例如 `Box<T>` 智能指针，智能指针 x 被 `*` 解引用为 i32 类型的值 1，然后再进行求和：
+     * ```rust
+     * let x = Box::new(1);
+     * let sum = *x + 1;
+     * ```
+     *
+     * #### 实现自定义智能指针
+     * 在 newtype 和类型别名章节，曾对 `Meters` 和 `Millimeters` 实现 Add 特征重载 `+`，让`Meters` 和 `Millimeters` 类型能够使用 `+` 操作符：
+     * ```rust
+     * // newtype实现可读性的提升
+     * struct Meters(u32);
+     * struct Millimeters(u32);
+     *
+     * // 解除Add默认只能使用相同类型的限制
+     * impl Add<Millimeters> for Meters {
+     *     type Output = Millimeters;
+     *     fn add(self, rhs: Millimeters) -> Millimeters {
+     *         Millimeters(self.0 * 1000 + rhs.0)
+     *     }
+     * }
+     *
+     * impl fmt::Display for Millimeters {
+     *     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+     *         write!(f, "{}mm", self.0)
+     *     }
+     * }
+     *
+     * let diff = Meters(3) + Millimeters(3000);
+     *
+     * println!("{}", diff); // 6000
+     * ```
+     *
+     * 同样的，智能指针 `Box<T>` 实现 Deref 特征，能重载 `*` 操作符，使用 `*` 直接对结构体进行解引用操作。
+     *
+     * 既然实现某一特征后可以重载对应的操作符，那意味着只需要实现 Deref 特征，就能实现自定义智能指针，也就可以使用 `*` 操作符。
+     *
+     * 实现一个类似 `Box<T>` 的智能指针，分析：`Box<T>` 只是将实际值存储在堆上，结构体中没有包含长度、最大长度的其他信息，因此用元组结构体就能满足要求。
+     * ```rust
+     * struct MyBox<T>(T);
+     *
+     * impl<T> MyBox<T> {
+     *      fn new(v: T) -> MyBox<T> {
+     *          MyBox(v)
+     *      }
+     * }
+     *
+     * let x = MyBox::new(2);
+     * let y = *x + 1; 错误代码，因为MyBox没有实现Deref特征，直接对结构体使用解引用操作符，编译器不知道该怎么解析
+     * ```
+     *
+     * **实现 Deref 特征，创建自定义指针**
+     * ```rust
+     * impl<T> Deref for MyBox<T> {
+     *      type Target = T;
+     *
+     *      fn deref(&self) -> &Self::T {
+     *          &self.0
+     *      }
+     * }
+     *
+     * let y = *x + 1; // 实现Deref特征后，可以使用 `*` 解引用操作符
+     * ```
      * 
-     * 考虑一下智能指针，它是一个结构体类型，如果直接对它进行解引用 `*myStruct`，显然编译器不知道该如何办，因此我们可以为智能指针结构体实现 Deref 特征。
+     * 很简单，当解引用 MyBox 智能指针时，返回元组结构体中的元素 `&self.0`：
+     * - 在 Deref 特征中声明了关联类型 Target，关联类型主要是为了提升代码可读性
+     * - deref 返回的是一个**常规引用**，可以被 `*` 进行解引用
      * 
+     * 
+     *
+     *
+     *
      */
 
     let x = 5;
     let y = &5;
     // println!("{}", x == y); 在标准比较或赋值中，rust不会自动应用解引用，因此不能直接比较
     println!("{}, {}, {}", x, y, *y); // 可以自动解引用
+
+    struct MyBox<T>(T);
+    impl<T> MyBox<T> {
+        fn new(v: T) -> MyBox<T> {
+            MyBox(v)
+        }
+    }
+
+    let x = MyBox::new(1);
+    // let y = *x + 1; 还未实现Deref特征，直接使用 `*` 解引用操作符，编译器不知道怎么解析，因此报错
+
+    // 为自定义类型实现Deref特征，变为智能指针
+    impl<T> Deref for MyBox<T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    let y = *x + 1; // 实现Deref特征后，可以使用 `*` 解引用操作符
 }
