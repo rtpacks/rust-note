@@ -96,16 +96,129 @@ fn main() {
      *      }
      * }
      *
-     * let y = *x + 1; // 实现Deref特征后，可以使用 `*` 解引用操作符
+     * // 实现Deref特征后，可以使用 `*` 解引用操作符
+     * let y = *x + 1;
+     * // 类型转换，实现Deref特征，自动增加引用并转换为值方法调用
+     * let y = *(Deref::deref(&x)) + 1;
      * ```
-     * 
-     * 很简单，当解引用 MyBox 智能指针时，返回元组结构体中的元素 `&self.0`：
+     *
+     * #### `*` 背后的原理
+     *
+     * 很简单，当解引用 MyBox 智能指针时，根据通用类型转换流程：
+     * > 通用类型转换是熟悉rust的必备技能，涉及到操作符就需要考虑类型是否发生转换
+     * > 1. 编译器检查它是否可以直接调用 T::foo(value)，即检查类型是否具有foo方法，称之为**值方法调用**
+     * > 2. 如果值方法调用无法完成(例如方法类型错误或者类型没有对应函数的 Self 进行实现)，那么编译器会尝试**增加自动引用**，会尝试以下调用： `<&T>::foo(value)` 和 `<&mut T>::foo(value)`，称之为**引用方法调用**
+     * > 3. 如果值方法和引用方法两个方法不工作，编译器会试着**解引用 T** ，然后再进行尝试。这里使用了 `Deref` 特征 —— 若 `T: Deref<Target = U>` (T 可以被解引用为 U)，那么编译器会使用 U 类型进行尝试，称之为**解引用方法调用**
+     * > 4. 如果 T 不能被解引用，且 T 是一个定长类型(在编译期类型长度是已知的)，那么编译器也会尝试将 T 从**定长类型转为不定长类型**，例如将 [i32; 2] 转为 [i32]
+     * > 5. 如果以上方式均不成功，那编译器将报错
+     *
+     * 由于 `*` 操作符要求操作变量为引用类型，根据类型转换和Deref特征，`*x` 可以正常转换成 `*(Deref::deref(&x))`，`deref` 方法返回元组结构体中的元素 `&self.0`：
      * - 在 Deref 特征中声明了关联类型 Target，关联类型主要是为了提升代码可读性
      * - deref 返回的是一个**常规引用**，可以被 `*` 进行解引用
-     * 
-     * 
+     * 因此类型转换成功，`*` 操作符正常解析。
      *
+     * Rust 为何要使用这个有点啰嗦的方式实现？原因在于**所有权系统**的存在。如果 deref 方法直接返回一个值，而不是引用，那么该值的所有权将被转移给调用者。
+     * 使用者不希望调用者仅仅只是 `*T` 一下，就拿走了智能指针中包含的值。
      *
+     * 需要注意的是，`*` 不会无限递归替换，从 `*y` 到 `*(y.deref())` 只会发生一次，而不会继续进行替换然后产生形如 `*((y.deref()).deref())` 的怪物。这里会在连续解引用和引用归一化解释。
+     *
+     * ### 函数和方法中的隐式 Deref 转换
+     * 对于函数和方法的传参，Rust 提供了一个极其有用的 Deref 隐式转换。
+     *
+     * 若一个类型实现了 Deref 特征，那么在**类型的引用在传给函数或方法**时，编译器会根据函数的参数签名来决定是否对实参进行隐式的 Deref 转换，例如：
+     * ```rust
+     * fn display(s: &str) {
+     *     println!("{}",s);
+     * }
+     *
+     * let s = String::from("Hello World");
+     * display(&s);
+     * ```
+     * 注意： **必须使用类型引用 `&` 的方式来触发 Deref，仅实参的引用类型才会触发自动解引用**。
+     *
+     * 分析以上代码：
+     * - String 实现了 Deref 特征，可以在需要时自动被转换为 `&str` 类型
+     * - 实参 `&s` 是一个 `&String` 类型，当它被传给 display 函数时，由于是类型的引用类型，并且实现了Deref特征，所以触发了编译器自动解引用，通过 Deref 转换将 `&String` 成了 `&str`
+     *
+     * ### 连续的隐式 Deref 转换
+     * Rust 对解引用操作的提升除了表现在自定义智能指针的解引用外，还表现在在**连续隐式解引用**上，即直到找到适合的参数形式为止。
+     *
+     * Box 是一个智能指针（存储在栈的引用和存储在堆上的实际类型数据），对比 `&String` 和 `&Box<String>`：
+     * ```rust
+     * fn display(s: &str) {
+     *     println!("{}",s);
+     * }
+     *
+     * let s = String::from("Hello World");
+     * display(&s);
+     *
+     * let s = Box::new(String::from("Hello World"));
+     * display(&s);
+     *
+     * ```
+     *
+     * `&Box<String>` 和 `&String` 一样，是能够正常被隐式转换的，关键在于**连续隐式转换**：
+     * Box 实现了 Deref 特征，**实参传递的是引用类型，触发编译器自动解引用操作**，然后被 Deref 成 String 类型，结果编译器发现不能满足 display 函数参数 `&str` 的要求，接着发现 String 实现 Deref 特征，把 String Deref 成 &str，最终成功的匹配了函数参数。
+     *
+     * 如果不能连续隐式解引用，就需要手动拟合参数类型：
+     * ```rust
+     * let x = &(*s)[..];
+     * display(x);
+     *
+     * display(&(*s)[..]);
+     * ```
+     * 结果不言而喻，肯定是 &s 的方式优秀得多。
+     *
+     * 总之，当参与其中的类型实现了 Deref 特征时，Rust 会分析该类型并且连续使用 Deref 直到最终获得一个引用来匹配函数或者方法的参数类型，这种行为是在编译期完成的，完全不会造成任何的性能损耗。
+     *
+     * 但是 Deref 并不是没有缺点，缺点就是：如果你不知道某个类型是否实现了 Deref 特征，那么在看到某段代码时，并不能在第一时间反应过来该代码发生了隐式的 Deref 转换。
+     *
+     * 事实上，不仅仅是 Deref，在 Rust 中还有各种 `From/Into` 等等会给阅读代码带来一定负担的特征。还是那句话，一切选择都是权衡，有得必有失，得了代码的简洁性，往往就失去了可读性，Go 语言就是一个刚好相反的例子。
+     *
+     * 这种隐式转换/连续隐式转换不仅可以用在函数的参数类型上，还可以用在赋值过程中：
+     * ```rust
+     * let s = Box::new(String::from("Hello World"));
+     * let s1 = &s;
+     * let s2: &str = &s;
+     * let s2 = &s as &str;
+     * let s3 = s.to_string();
+     * ```
+     * - 对于 s1，只是简单的取引用，因此类型是 `&Box<String>`，
+     * - 对于 s2，通过两次 Deref 将 &str 类型的值赋给了它（**赋值操作需要手动解引用**，即在赋值过程中手动标注类型）
+     * - 对于 s3，直接调用方法 to_string，实际上 Box 根本没有没有实现该方法，能调用 to_string，是因为编译器对 Box 应用了 Deref 的结果（**方法调用会自动解引用**），即通用类型转换（五个步骤）
+     *
+     * > Rust 会在方法调用和字段访问时自动应用解引用强制多态（deref coercions），在一些其他情况下，如在标准比较操作或赋值中，Rust 不会自动应用解引用：**在表达式中不能自动地执行隐式 Deref 解引用操作**。
+     *
+     * 不仅是 Box 内置的智能指针，自定义智能指针 `MyBox` 也能实现相同的功能：
+     * ```rust
+     * struct MyBox<T>(T);
+     * impl<T> MyBox<T> {
+     *     fn new(v: T) -> MyBox<T> {
+     *         MyBox(v)
+     *     }
+     * }
+     *
+     * // 为自定义类型实现Deref特征，变为智能指针
+     * impl<T> Deref for MyBox<T> {
+     *     type Target = T;
+     *     fn deref(&self) -> &Self::Target {
+     *         &self.0
+     *     }
+     * }
+     *
+     * fn display(s: &str) {
+     *      println!("{s}");
+     * }
+     *
+     * let s = String::from("Hello World");
+     * let s = MyBox::new(String::from("Hello World"));
+     * display(&s); // 通过传递实参的引用类型，触发编译器自动解引用操作
+     *
+     * let s1 = &s;
+     * let s2: &str = &s;
+     * let s2 = &s as &str;
+     * let s3 = s.to_string();
+     * ```
      *
      */
 
@@ -131,5 +244,39 @@ fn main() {
             &self.0
         }
     }
-    let y = *x + 1; // 实现Deref特征后，可以使用 `*` 解引用操作符
+    // 实现Deref特征后，可以使用 `*` 解引用操作符
+    let y = *x + 1;
+    // 类型转换，实现Deref特征，转换为值方法调用
+    let y = *(Deref::deref(&x)) + 1;
+
+    let s = String::from("value");
+    let p = Deref::deref(&s);
+
+    fn display(s: &str) {
+        println!("{s}");
+    }
+    // 实参需要传递引用类型才能触发编译器自动解引用操作
+    let s = String::from("Hello World");
+    display(&s);
+    // 连续解引用操作
+    let s = Box::new(String::from("Hello World"));
+    display(&s);
+
+    let x = &(*s)[..];
+    display(x);
+
+    // 隐式转换和连续隐式转换可以用在赋值过程中
+    let s = Box::new(String::from("Hello World"));
+    let s1 = &s;
+    let s2: &str = &s;
+    let s2 = &s as &str;
+    let s3 = s.to_string();
+
+    // 自定义指针也能实现连续转换
+    let s = MyBox::new(String::from("Hello World"));
+    let s1 = &s;
+    let s2: &str = &s;
+    let s2 = &s as &str;
+    let s3 = s.to_string();
+    display(&s);
 }
