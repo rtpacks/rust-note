@@ -220,6 +220,61 @@ fn main() {
      * let s3 = s.to_string();
      * ```
      *
+     * ### Deref 规则总结
+     * **一个类型为 T 的对象 `foo`，如果 `T: Deref<Target=U>` 即 T 实现了 Deref 特征，那么 foo 的引用 `&foo` 在需要的时候会被自动转换为 `&U`**。
+     *
+     * ```rust
+     * let s = String::from("Hello World");
+     * let s1 = &s;
+     * let s2: &str = &s;
+     * let s2 = &s as &str;
+     * let s3 = s.to_string();
+     * ```
+     *
+     * #### 引用归一化
+     * 引用归一化 `T: Deref<Target=U>` 包含两部分内容：
+     *
+     * 第一是把**内置智能指针（Box、Rc、Arc、Cow 等）或自定义智能指针**，根据 `T: Deref<Target=U>` 重载的 Deref 特征的 `deref` 方法，从结构体脱壳，并将其变为内部类型的引用类型 `&v`
+     *
+     * 第二是针对多重引用归一化，如将引用类型的引用 `&&v` 归一成 `&v`。这是因为在标准库中为引用类型实现了 Deref 特征：`&T: Deref<Target=U>`，当 T 是一个引用类型时，`&T` 就代表引用类型的引用：
+     * ```rust
+     * impl<T: ?Sized> Deref for &T {
+     *     type Target = T;
+     *
+     *     fn deref(&self) -> &T {
+     *         *self
+     *     }
+     * }
+     * ```
+     * 以上的实现就是将多重引用归一化的关键，为 `&T` 实现 Deref 特征，意味着 Self 为 `Self: &T` 类型，那么 deref 方法的接收者 `&self == self: &Self` 为 `self: &(&T)` 类型，输入为 `&&T` 返回为 `&T` 类型，即针对引用的引用，最终归一化成 `&T`。
+     * ```shell
+     * Self = &T -> &self = self: &Self = self: &&T -> *self = *&Self = *&&T = &T
+     * ```
+     *
+     * 案例：
+     * ```rust
+     * let s = String::from("Hello World");
+     * let s1 = &s;
+     * let s2: &str = &s;
+     * let s2 = &s as &str;
+     * let s3 = s.to_string();
+     * let s4 = (&s1).to_string(); // 归一化
+     *
+     * let s = MyBox::new(String::from("Hello World"));
+     * let s1 = &s;
+     * let s2: &str = &s;
+     * let s2 = &s as &str;
+     * let s3 = s.to_string();
+     * let s4 = (&s1).to_string(); // 归一化
+     *
+     * fn display(s: &str) {
+     *      println!("{s}");
+     * }
+     * display(&s); // 智能指针可以被自动脱壳为内部的 `String` 引用 `&String`，然后 `&String` 再自动解引用为 `&str`
+     * ```
+     *
+     *
+     *
      */
 
     let x = 5;
@@ -279,4 +334,10 @@ fn main() {
     let s2 = &s as &str;
     let s3 = s.to_string();
     display(&s);
+
+    s1.to_string();
+
+    String::to_string(&s);
+
+    &s.to_string();
 }
