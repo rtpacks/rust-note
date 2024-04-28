@@ -2,7 +2,7 @@ use ilearn::{run, Config};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::{
     fmt::{Debug, Display},
-    ops::{Add, Deref, Index},
+    ops::{Add, Deref, DerefMut, Index},
 };
 
 fn main() {
@@ -273,7 +273,75 @@ fn main() {
      * display(&s); // 智能指针可以被自动脱壳为内部的 `String` 引用 `&String`，然后 `&String` 再自动解引用为 `&str`
      * ```
      *
+     * ### 三种 Deref 转换
+     * 以上的案例都是不可变的 Deref 转换，Rust 除了支持不可变引用的 Deref 转换外，还支持以下两种引用的转换：
+     * - 一个可变的引用转换成另一个可变的引用
+     * - 一个可变引用转换成不可变的引用
      *
+     * 转换的规则如下：
+     * - 当 `T: DerefMut<Target=U>`，可以将 `&mut T` 转换成 `&mut U`，即将可变引用DerefMut为可变引用
+     * - 当 `T: Deref<Target=U>`，可以将 `&mut T` 转换成 `&U`，即将可变引用Deref不可变引用
+     * - 当 `T: Deref<Target=U>`，可以将 `&T` 转换成 `&U`，即将不可变引用Deref不可变引用
+     *
+     * ```rust
+     * struct MyBox<T>(T);
+     * impl<T> MyBox<T> {
+     *     fn new(v: T) -> MyBox<T> {
+     *         MyBox(v)
+     *     }
+     * }
+     *
+     * // 为自定义类型实现Deref特征，变为智能指针
+     * impl<T> Deref for MyBox<T> {
+     *     type Target = T;
+     *     fn deref(&self) -> &Self::Target {
+     *         &self.0
+     *     }
+     * }
+     *
+     * // 实现DerefMut特征，DerefMut的前提是实现了Deref特征
+     * impl<T> DerefMut for MyBox<T> {
+     *     fn deref_mut(&mut self) -> &mut Self::Target {
+     *         &mut self.0
+     *     }
+     * }
+     *
+     * // 不可变引用Deref转换为不可变引用
+     * fn display(s: &str) {
+     *     println!("{s}");
+     * }
+     *
+     * // 可变引用DerefMut转换为可变引用，实现DerefMut的前提是实现了Deref特征，因为 `pub trait DerefMut: Deref`
+     * fn display_mut(s: &mut String) {
+     *     s.push_str("world");
+     *     println!("{}", s);
+     * }
+     * 
+     * let s = MyBox::new(String::from("Hello World"));
+     * display(&s); // 不可变引用Deref转换为不可变引用
+     * 
+     * let mut s = MyBox::new(String::from("Hello World"));
+     * display_mut(&mut s); // 可变引用通过DerefMut转换为新的可变引用
+     *
+     * display(&mut s); // 可变引用通过Deref转换为新的不可变引用
+     * ```
+     * 
+     * 需要注意的几点：
+     * - 只有类型的引用才会触发编译器自动解引用功能
+     * - 要实现 DerefMut 必须要先实现 Deref 特征：`pub trait DerefMut: Deref`
+     * - `T: DerefMut<Target=U>` 解读：将 `&mut T` 类型通过 DerefMut 特征的方法转换为 `&mut U` 类型，对应上例中，就是将 `&mut MyBox<String>` 转换为 `&mut String`
+     *
+     * 对于上述三条规则中的第二条，它比另外两条稍微复杂了点：Rust 可以把可变引用隐式的转换成不可变引用，但反之则不行。
+     *
+     * 如果从 Rust 的所有权和借用规则的角度考虑，当你拥有一个可变的引用，那该引用肯定是对应数据的唯一借用，那么此时将可变引用变成不可变引用并不会破坏借用规则；但是如果你拥有一个不可变引用，那同时可能还存在其它几个不可变的引用，如果此时将其中一个不可变引用转换成可变引用，就变成了可变引用与不可变引用的共存，最终破坏了借用规则。
+     * 
+     * ### 总结
+     * Deref 可以说是 Rust 中最常见的**隐式类型转换**，它虽然复杂，但是还是属于类型转换中的一种。Deref 最重要的特点就是归一化，包含两个方面：
+     * - 只要链条上的类型实现了 Deref 特征，它可以实现如 `Box<String> -> String -> &str` 连续的隐式转换
+     * - 针对多重引用类型，如引用的引用类型 `&&T`，可以实现将 `&&T` 归一成 `&T`
+     * 
+     * 在程序中也可以为自定义类型实现 Deref 特征，但是原则上来说，只应该为**自定义的智能指针**实现 Deref。
+     * 例如，虽然可以为自定义数组类型实现 Deref 以避免 `myArr.0[0]` 的使用形式，但是 Rust 官方并不推荐这么做，特别是在开发三方库时。
      *
      */
 
@@ -340,4 +408,22 @@ fn main() {
     String::to_string(&s);
 
     &s.to_string();
+
+    // 实现DerefMut特征，DerefMut的前提是实现了Deref特征
+    impl<T> DerefMut for MyBox<T> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+    display(&s); // 不可变引用 Deref 变为不可变引用
+
+    // 可变引用转变为可变引用
+    fn display_mut(s: &mut String) {
+        s.push_str("world");
+        println!("{}", s);
+    }
+    let mut s = MyBox::new(String::from("Hello World"));
+    display_mut(&mut s); // 可变引用通过DerefMut转换为新的可变引用
+
+    display(&mut s); // 可变引用通过Deref转换为新的不可变引用
 }
