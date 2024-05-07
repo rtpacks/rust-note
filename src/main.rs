@@ -131,13 +131,87 @@ fn main() {
      * ```
      *
      * ### 手动销毁
-     * 
-     * 手动调用时，所有权通过参数传入 `drop()`，然后在 `drop()` 方法结束时(离开作用域)，调用 `Drop()::drop()` 释放掉形参。
-     * 也就是说，并不是mem::drop()导致的释放，而是在mem::drop()结束时自动释放。
-     * 就是把所有权带走不传出来，假如实现了 Copy trait 就不起作用了
+     * > 析构函数 destructor：一个用来**清理实例**的通用编程概念，与构造函数对应
      *
+     * Drop 特征是编译器自动插入变量的收尾工作代码，编译器通过 `Drop::drop(&mut self)` 释放资源。
+     * 但 Drop 特征有一个特殊限制：**不允许手动调用析构函数 `Drop::drop(&mut self)`**。
+     *
+     * 即实现 Drop 特征的结构体，编译器可以自动插入收尾工作代码（释放资源 Drop::drop），但不允许手动调用 `Drop::drop(&mut self)` 释放资源。
+     *
+     * ```rust
+     * #[derive(Debug)]
+     * struct HasDrop3 {
+     *      bar: HasDrop2,
+     *      foo: HasDrop1,
+     * }
+     * impl Drop for HasDrop3 {
+     *      fn drop(&mut self) {
+     *          println!("HasDrop3 dropping");
+     *      }
+     * }
+     *
+     * let mut z = HasDrop3 { foo: HasDrop1, bar: HasDrop2 };
+     *
+     * z.drop(); 错误代码，不允许直接调用析构函数，等于下一行
+     * Drop::drop(&mut z); 错误代码，不允许直接调用析构函数，属于上一行的类型转换
+     * ```
+     *
+     * 以上报错是**不允许手动调用析构函数 `Drop::drop(&mut self)`**引发的，它受到 rust 的所有权模型的限制：
+     *
+     * 如果允许手动调用 `Drop::drop(&mut self)`，`Drop::drop(&mut self)` 的接收者是 `&mut self`。
+     * 因为 `&mut self` 没有转移变量所有权，所以在手动调用 `Drop::drop` 释放变量后，编译器根据生命周期检查，发现变量的**所有权未丢失**，这样就会造成两个严重问题：
+     *
+     * **1. 可能访问错误数据**
+     *
+     * 因为手动调用 `Drop::drop` 释放变量后，编译器根据生命周期检查发现变量所有权未丢失，变量可以正常使用，所以再次访问时，会访问到错误的数据。
+     * ```rust
+     * let mut z = HasDrop3 { foo: HasDrop1, bar: HasDrop2 };
+     * z.drop();
+     * println!("Running!:{:#?}", z); 访问错误的数据
+     * ```
+     *
+     * **2. 二次析构（释放）**
+     *
+     * 同样，编译器发现所有权未丢失，变量可以再次使用，且变量实现了Drop特征，因此在函数结束时，根据Drop特征自动释放变量，造成二次析构。
+     * ```rust
+     * fn display() {
+     *      let mut z = HasDrop3 { foo: HasDrop1, bar: HasDrop2 };
+     *      z.drop();
+     * }
+     * display()
+     * ```
+     *
+     * #### 通过 drop 释放
+     * `Drop::drop(&mut self)` 是能够释放资源的，但根据所有权模型和生命周期，`&mut self`由于没有转移变量所有权，手动调用会存在许多问题。
+     *
+     * 以上的案例都在说明，如果希望释放资源，**需要转移变量所有权**，让变量不能再使用，即让所有权模型和生命周期正常工作，rust 提供的手动释放函数 `mem::drop()` 函数非常简单：
+     * ```rust
+     * pub fn drop<T>(_x: T) {}
+     * ```
+     *
+     * 所有权通过参数传入 `drop()`，然后在 `drop()` 方法结束时(离开作用域)，调用 `Drop()::drop()` 释放掉形参（rust为几乎所有的类型都实现了Drop特征），保证堆上的资源被释放。
+     * 也就是说，并不是 `mem::drop()` 导致的释放，而是在 `mem::drop()` 结束时编译器根据 Drop 特征自动插入的收尾工作代码（自动释放）。
+     *
+     * 它的核心目的就是把所有权带进来，而不传出来。这样就保证 `mem::drop` 函数正常释放变量，并且 `mem::drop` 函数外该变量不能再使用。
+     *
+     * 手动做一个drop函数：
+     * ```rust
+     *     let mut z = HasDrop3 {
+     *     foo: HasDrop1,
+     *     bar: HasDrop2,
+     * };
+     * fn dropHeap<T>(_v: T) {}
+     * dropHeap(z);
+     * 
+     * println!("{:#?}", z); 错误代码，所有权被 dropHeap 函数转移，不能再使用变量
+     * ```
+     * 
+     * ### Drop::drop(&mut self) 的 &mut self
+     * 为什么 `Drop()::drop(&mut self)` 的接收者是 `&mut self`？
      *
      * drop之所以是&mut self，是为了在清理时可以方便的修改实例内部的信息。
+     *
+     * 假如实现了 Copy trait 就不起作用了
      *
      *
      */
@@ -198,4 +272,22 @@ fn main() {
         bar: HasDrop2,
     };
     println!("main over");
+
+    // Drop::drop 不允许手动调用
+    let mut z = HasDrop3 {
+        foo: HasDrop1,
+        bar: HasDrop2,
+    };
+    // z.drop(); 错误代码，不允许直接调用析构函数，等于下一行
+    // Drop::drop(&mut z); 错误代码，不允许直接调用析构函数，属于上一行的类型转换
+
+    drop(z);
+
+    let mut z = HasDrop3 {
+        foo: HasDrop1,
+        bar: HasDrop2,
+    };
+    fn dropHeap<T>(_v: T) {}
+    dropHeap(z);
+    // println!("{:#?}", z); 错误代码，所有权被转移，不能再使用变量
 }
