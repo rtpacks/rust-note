@@ -202,16 +202,37 @@ fn main() {
      * };
      * fn dropHeap<T>(_v: T) {}
      * dropHeap(z);
-     * 
+     *
      * println!("{:#?}", z); 错误代码，所有权被 dropHeap 函数转移，不能再使用变量
      * ```
-     * 
+     *
      * ### Drop::drop(&mut self) 的 &mut self
-     * 为什么 `Drop()::drop(&mut self)` 的接收者是 `&mut self`？
+     * `Drop` 特征是rust自动清理的来源，它的职责是**执行任何必要的清理逻辑，而不是处理内存释放细节**。
      *
-     * drop之所以是&mut self，是为了在清理时可以方便的修改实例内部的信息。
+     * 为什么 `Drop()::drop(&mut self)` 的接收者是 `&mut self`，`&self` `self` 作为接收者有什么缺陷？
      *
-     * 假如实现了 Copy trait 就不起作用了
+     * > https://www.zhihu.com/question/612370614
+     *
+     * 1. 不可能是 `&self`
+     * 要清理结构体内部的数据，必须能具有变量所有权或可变引用才能改变结构体数据，因此只读引用不适合。
+     *
+     * 2. `self` 不适合
+     * 在上面的提到过：**堆上的变量和值，作用域内声明的被销毁，作用域外声明的保留**。
+     * 
+     * `self` 接收者会转移变量的所有权，即相当于在函数作用域内声明了变量，在函数栈退出时就会被释放：
+     * ```rust
+     * struct CustomStruct;
+     * impl Drop for CustomStruct {
+     *     fn drop(self) {
+     *         println!("drop");
+     *         // 这里由于函数栈的退出，当前的 `self` drop，又调用了析构，因此会无限打印"drop"
+     *     }
+     * }
+     * ```
+     * 
+     * 从示例中可以预测到，如果将 `self: Self` 当作接收者，第一次是外部函数的函数栈退出，调用了析构函数，第二次开始是析构函数的函数栈退出，调用了析构函数，形成死循环调用，因此 `self: Self` 是不适合的。
+     *
+     * drop 之所以是&mut self，是为了在清理时可以方便的修改实例内部的信息。假如实现了 Copy trait 就不起作用了
      *
      *
      */
