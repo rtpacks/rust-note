@@ -74,20 +74,61 @@ fn main() {
      * let s = RefCell::new(String::from("Hello World"));
      * let s1 = s.borrow(); // RefCell 记录一次不可变引用，不可变引用是1，可变引用是0，符合借用规则，正常运行
      * let s1 = s.borrow(); // RefCell 记录一次不可变引用，不可变引用是2，可变引用是0，符合借用规则，正常运行
-     * // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是2，可变引用是1，此时会报错，因为不能同时存在不可变引用和可变引用
+     * // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是2，可变引用是1，此时会报错，因为不能同时存在不可变引用和可变引用
      *
      * let s = RefCell::new(String::from("Hello World"));
-     * let s1 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是0，可变引用是1，符合借用规则，正常运行
-     * // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是0，可变引用是2，此时会报错，因为不能同时存在多个可变引用（一个可变引用周期内存在另外一个可变引用）
+     * let s1 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行
+     * // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，此时会报错，因为不能同时存在多个可变引用（一个可变引用周期内存在另外一个可变引用）
      * println!("{s1}");
+     *
+     * let s = RefCell::new(String::from("Hello World"));
+     * *s.borrow_mut() = String::from("Hi"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * *s.borrow_mut() = String::from("Hello"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * println!("{s}");
      * ```
      *
-     * 也就是说 RefCell 实际上**没有解决可变引用和引用可以共存的问题**。
-     * 它的关注点在于为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，这里是 unsafe 的实现，不受借用规则限制。
-     * 绕过了编译期的错误，将报错从编译期推迟到运行时，从编译器错误变成了 panic 异常。
+     * 也就是 RefCell 实际上**没有解决可变引用和引用可以共存的问题**。
+     * 它的关注点在于为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，这里是 **unsafe** 的实现，不受借用规则限制。
+     * 所以 RefCell 只是绕过了编译期的错误，将报错从编译期推迟到运行时，从编译器错误变成了 panic 异常。
      *
-     * TODO 既然没有解决问题，为什么还需要RefCell？这是因为复杂类型的不可变与可变性
+     * #### 为什么需要 RefCell？
+     * 既然没有解决问题，为什么还需要 RefCell？这是因为复杂类型的不可变与可变性。
+     * 由于 Rust 的 mutable 特性，一个结构体中的字段，要么全都是 immutable，要么全部是 mutable，**不支持针对部分字段进行设置**。
+     * 比如，在一个 struct 中，可能只有个别的字段需要修改，其他字段并不需要修改，为了一个字段而将整个 struct 变为 `&mut` 是不合理的。
+     *
+     * 而 RefCell 通过 unsafe 操作，可以为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，只需要接收的变量遵守借用规则就不会出现运行时错误。
+     *
+     * 这意味着可以**通过 RefCell 让一个结构体既有不可变字段，也有可变字段**，例如：
+     * ```rust
+    * // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
+    * #[derive(Debug)]
+    * struct Person {
+    *     name: RefCell<String>,
+    *     age: i32,
+    * }
+    * let p = Person {
+    *     name: RefCell::new(String::from("L")),
+    *     age: 18,
+    * };
+    * // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
+    * *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    * *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    * println!("{p:?}");
+     * ```
      * 
+     * 对于大型的复杂程序，可以选择使用 RefCell 来让事情简化。例如在 Rust 编译器的ctxt结构体中有大量的 RefCell 类型的 map 字段，主要的原因是：这些 map 会被分散在各个地方的代码片段所广泛使用或修改。由于这种分散在各处的使用方式，导致了管理可变和不可变成为一件非常复杂的任务（甚至不可能），你很容易就碰到编译器抛出来的各种错误。而且 RefCell 的运行时错误在这种情况下也变得非常有用：一旦有人做了不正确的使用，代码会 panic，然后告诉我们哪些借用冲突了。
+     * 
+     * 总之，当有一个复杂类型，既有可变又有不可变，又或者需要被四处使用和修改然后导致借用关系难以管理时，都可以优先考虑使用 RefCell。
+     * 
+     * #### RefCell 总结
+     * - RefCell 适用Copy和非Copy类型，一般来说Copy可直接选择Cell
+     * - RefCell 只是绕过编译期的借用规则，程序运行期没有绕过
+     * - RefCell 适用于编译期误报或者一个引用被在多处代码使用、修改以至于难于管理借用关系时
+     * - 使用 RefCell 时，`borrow` 和 `borrow_mut` 提供不可变引用和可变引用不能违背借用规则，否则会导致运行期的 panic
+     *
+     * TODO 选择Cell还是RefCell
+     * 
+     * ### Rc/Arc + RefCell 的组合使用
      * 可以将所有权、借用规则和这些智能指针做一个对比：
      * | Rust 规则                          | 智能指针带来的额外规则                 |
      * | ---------------------------------  | ------------------------------------ |
@@ -126,11 +167,11 @@ fn main() {
     let s = RefCell::new(String::from("Hello World"));
     let s1 = s.borrow(); // RefCell 记录一次不可变引用，不可变引用是1，可变引用是0，符合借用规则，正常运行
     let s1 = s.borrow(); // RefCell 记录一次不可变引用，不可变引用是2，可变引用是0，符合借用规则，正常运行
-                         // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是2，可变引用是1，此时会报错，因为不能同时存在不可变引用和可变引用
+                         // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是2，可变引用是1，此时会报错，因为不能同时存在不可变引用和可变引用
 
     let s = RefCell::new(String::from("Hello World"));
-    let s1 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是0，可变引用是1，符合借用规则，正常运行
-                             // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，，不可变引用是0，可变引用是2，此时会报错，因为不能同时存在多个可变引用（一个可变引用周期内存在另外一个可变引用）
+    let s1 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行
+                             // let s2 = s.borrow_mut(); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，此时会报错，因为不能同时存在多个可变引用（一个可变引用周期内存在另外一个可变引用）
     println!("{s1}");
 
     let s = RefCell::new(String::from("Hello World"));
@@ -140,4 +181,19 @@ fn main() {
 
     let mut s = String::from("Hello World");
     let s_ref = RefCell::new(s);
+
+    // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
+    #[derive(Debug)]
+    struct Person {
+        name: RefCell<String>,
+        age: i32,
+    }
+    let p = Person {
+        name: RefCell::new(String::from("L")),
+        age: 18,
+    };
+    // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
+    *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    println!("{p:?}");
 }
