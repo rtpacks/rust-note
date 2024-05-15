@@ -56,6 +56,8 @@ fn main() {
      * let my_cell = MyCell::new("Hello World");
      * my_cell.set("Hi"); 错误，set函数 `set(&mut self, v: T)` 要求接收者是可变引用 `self: &mut Self`，而此时的 `my_cell` 是一个不可变引用。
      * ```
+     * #### 简单总结
+     * Cell 通过内部的 `get set` 方法完成数据的获取和替换，即 `get` 提供不可变引用功能（读），`get set` 提供可变引用（读写）
      *
      * ### RefCell
      * 在实际开发中，程序操作的更多是一个复杂数据类型，如多字段深层结构体。Cell 适用于 实现了 Copy 特征的类型，显然当复杂类型没有实现 Copy 时就需要另外一个内部可变性的工具来代替 Cell。
@@ -100,34 +102,141 @@ fn main() {
      *
      * 这意味着可以**通过 RefCell 让一个结构体既有不可变字段，也有可变字段**，例如：
      * ```rust
-    * // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
-    * #[derive(Debug)]
-    * struct Person {
-    *     name: RefCell<String>,
-    *     age: i32,
-    * }
-    * let p = Person {
-    *     name: RefCell::new(String::from("L")),
-    *     age: 18,
-    * };
-    * // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
-    * *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
-    * *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
-    * println!("{p:?}");
+     * // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
+     * #[derive(Debug)]
+     * struct Person {
+     *     name: RefCell<String>,
+     *     age: i32,
+     * }
+     * let p = Person {
+     *     name: RefCell::new(String::from("L")),
+     *     age: 18,
+     * };
+     * // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
+     * *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * println!("{p:?}");
      * ```
-     * 
+     *
      * 对于大型的复杂程序，可以选择使用 RefCell 来让事情简化。例如在 Rust 编译器的ctxt结构体中有大量的 RefCell 类型的 map 字段，主要的原因是：这些 map 会被分散在各个地方的代码片段所广泛使用或修改。由于这种分散在各处的使用方式，导致了管理可变和不可变成为一件非常复杂的任务（甚至不可能），你很容易就碰到编译器抛出来的各种错误。而且 RefCell 的运行时错误在这种情况下也变得非常有用：一旦有人做了不正确的使用，代码会 panic，然后告诉我们哪些借用冲突了。
-     * 
-     * 总之，当有一个复杂类型，既有可变又有不可变，又或者需要被四处使用和修改然后导致借用关系难以管理时，都可以优先考虑使用 RefCell。
-     * 
+     *
+     * 总之，当有一个复杂类型，既有可变又有不可变，又或者需要被到处使用和修改然后导致借用关系难以管理时，都可以优先考虑使用 RefCell。
+     *
      * #### RefCell 总结
-     * - RefCell 适用Copy和非Copy类型，一般来说Copy可直接选择Cell
+     * - RefCell 适用 Copy 和非 Copy 类型，一般来说 Copy 类型可直接选择 Cell
      * - RefCell 只是绕过编译期的借用规则，程序运行期没有绕过
      * - RefCell 适用于编译期误报或者一个引用被在多处代码使用、修改以至于难于管理借用关系时
      * - 使用 RefCell 时，`borrow` 和 `borrow_mut` 提供不可变引用和可变引用不能违背借用规则，否则会导致运行期的 panic
+     * - RefCell 通过 unsafe 操作，可以为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，由于是 unsafe 操作，编译时期 `borrow(不可变借用)` 和 `borrow_mut(可变借用)` 方法内部实现不受借用规则的限制，所以编译不会报错。但是两个方法的接收者变量不是 unsafe 操作，接收者会受到借用规则的限制，RefCell 智能指针在运行时会记录不可变借用和可变借用的次数，如果方法接收者变量不符合借用规则，则会panic。
      *
-     * TODO 选择Cell还是RefCell
-     * 
+     * ### 选择 Cell 还是 RefCell
+     * - RefCell 适用 Copy 和非 Copy 类型，一般来说 Copy 类型可直接选择 Cell
+     * - Cell 通过内部的 `get set` 方法完成数据的获取和替换，即 `get` 提供不可变引用功能（读），`get set` 提供可变引用（读写）
+     * - RefCell 通过 unsafe 操作，可以为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，由于是 unsafe 操作，编译时期 `borrow(不可变借用)` 和 `borrow_mut(可变借用)` 方法内部实现不受借用规则的限制，所以编译不会报错。但是两个方法的接收者变量不是 unsafe 操作，接收者会受到借用规则的限制，RefCell 智能指针在运行时会记录不可变借用和可变借用的次数，如果方法接收者变量不符合借用规则，则会panic。
+     * - Cell 没有额外的性能损耗，RefCell 有一点运行期开销，原因是它包含了一个字节大小的“借用状态”指示器，该指示器在每次运行时借用时都会被修改，进而产生一点开销。
+     *
+     * 总之，当需要使用内部可变性时，首选 Cell，只有类型没有实现 Copy 特征时，再选择 RefCell。
+     *
+     * ```rust
+     * // code snipet 1
+     * let x = Cell::new(1);
+     * let y = &x;
+     * let z = &x;
+     * x.set(2);
+     * y.set(3);
+     * z.set(4);
+     * println!("{}", x.get());
+     *
+     * // code snipet 2 编译失败，原因是不能对基础类型取引用
+     * let mut x = 1;
+     * let y = &mut x;
+     * let z = &mut x;
+     * x = 2;
+     * *y = 3;
+     * *z = 4;
+     * println!("{}", x);
+     * ```
+     *
+     * ### 内部可变性
+     * Cell 与 RefCell 具有内部可变性，何为内部可变性？简单来说，**对一个不可变的值进行可变借用**。具体到 Cell 和 RefCell：
+     * - Cell 通过内部的 `get set` 方法完成数据的获取和替换，即 `get` 提供不可变引用功能（读），`get set` 提供可变引用（读写）
+     * - RefCell 通过 unsafe 操作，可以为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，由于是 unsafe 操作，编译时期 `borrow(不可变借用)` 和 `borrow_mut(可变借用)` 方法内部实现不受借用规则的限制，所以编译不会报错。但是两个方法的接收者变量不是 unsafe 操作，接收者会受到借用规则的限制，RefCell 智能指针在运行时会记录不可变借用和可变借用的次数，如果方法接收者变量不符合借用规则，则会panic。
+     *
+     * 内部可变性并不符合 Rust 的基本借用规则：**不能对一个不可变的值进行可变借用**，这会破坏 Rust 的安全性保证。
+     * 这是因为当值不可变时，可能会有多个不可变的引用指向它，此时若将其中一个修改为可变的，会造成可变引用与不可变引用共存的情况，这可能会造成未定义的行为。
+     *
+     * 相反，可以对一个可变值进行不可变借用，根据借用规则只允许一个借用存在，所以当值可变时，最多只会有一个可变引用指向它，将其修改为不可变，那么最终依然是只有一个不可变的引用指向它。
+     *
+     * Rust 的借用规则是内存安全的保证基石，但是有些场景遵守借用规则会非常麻烦，比如由于 Rust 的 mutable 特性，一个结构体中的字段，要么全都是 immutable，要么全部是 mutable，**不支持针对部分字段进行设置**。
+     *
+     * 比如；
+     * ```rust
+     * // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
+     * #[derive(Debug)]
+     * struct Person {
+     *     name: RefCell<String>,
+     *     age: i32,
+     * }
+     * let p = Person {
+     *     name: RefCell::new(String::from("L")),
+     *     age: 18,
+     * };
+     * // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
+     * *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * println!("{p:?}");
+     * ```
+     *
+     * 如果需要修改 age 则需要将整个 Person 设置为可变，这种行为不合理。
+     *
+     * 又比如为自定义结构体实现外部特征，外部特征的方法接收者为 `self: &Self` 时：
+     * ```rust
+     * // 定义在外部库中的特征，不能直接修改
+     * pub trait Messenger {
+     *     fn send(&self, msg: String);
+     * }
+     *
+     * // 自定义的数据结构和实现（消息队列结构体）
+     * struct MsgQueue {
+     *     msg_cache: Vec<String>,
+     * }
+     *
+     * // 为自定义数据结构实现外部特征
+     * impl Messenger for MsgQueue {
+     *     fn send(&self, msg: String) {
+     *         self.msg_cache.push(msg) // 报错，因为接收者 self 的类型是不可变引用，不能通过不可变引用修改值
+     *     }
+     * }
+     * ```
+     * 因为接收者 self 的类型是不可变引用，**不能通过不可变引用修改值**，所以上述代码编译就会报错。
+     * 并且由于实现的是**外部特征，不能直接修改方法签名**，此时就依靠 `RefCell` 的内部可变性为不可变值提供可变引用，进而修改：
+     *
+     * ```rust
+     * // 定义在外部库中的特征，不能直接修改
+     * pub trait Messenger {
+     *     fn send(&self, msg: String);
+     * }
+     *
+     * // 自定义的数据结构和实现（消息队列结构体），用 RefCell 为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**
+     * struct MsgQueue {
+     *     msg_cache: RefCell<Vec<String>>,
+     * }
+     *
+     * // 为自定义数据结构实现外部特征
+     * impl Messenger for MsgQueue {
+     *     fn send(&self, msg: String) {
+     *
+     *         // 编译正常，虽然接收者 self 的类型是不可变引用，但 msg_cache 通过内部可变性提供了可变引用。
+     *         // 此外，运行正常，RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则正常运行。
+     *         self.msg_cache.borrow_mut().push(msg)
+     *     }
+     * }
+     * ```
+     * 通过 RefCell 为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**，解决了 `&self` 不能通过不可变引用改变值的问题。
+     *
+     * #### 总结
+     * 当遇到需要通过不可变引用修改数据，或者需要被到处使用和修改然后导致借用关系难以管理时，就可以考虑内部可变性的 Cell 和 RefCell。
+     *
      * ### Rc/Arc + RefCell 的组合使用
      * 可以将所有权、借用规则和这些智能指针做一个对比：
      * | Rust 规则                          | 智能指针带来的额外规则                 |
@@ -194,6 +303,6 @@ fn main() {
     };
     // p.age = 22; 错误的，如果需要age可更改，需要p是可变的。
     *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
-    *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是2，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
     println!("{p:?}");
 }
