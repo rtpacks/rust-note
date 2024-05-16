@@ -244,11 +244,33 @@ fn main() {
      * | 一个数据只有一个所有者               | Rc/Arc让一个数据可以拥有多个所有者     |
      * | 要么多个不可变借用，要么一个可变借用  | RefCell实现编译期可变、不可变引用共存   |
      * | 违背规则导致编译错误                 | 违背规则导致运行时panic               |
-     * `Rc/Arc` 和 `RefCell` 合理结合，可以解决 Rust 中严苛的所有权和借用规则带来的某些场景下难使用的问题。
      *
-     * 但是这个结合并不是运行有效的：
+     * `Rc/Arc` 和 `RefCell` 合理结合，可以解决 Rust 中严苛的所有权和借用规则带来的某些场景下难使用的问题，甚至某些时候可以达到其他带GC的高级语言的程度。
+     * - Rc/Arc 智能指针通过引用计数（不可变引用）在符合借用规则的情况下实现一个值可以被多个变量访问。实现原理是：**利用结构体存储底层数据的地址和引用次数**，底层数据（实际类型数据）存放在堆上，结构体（胖指针，智能指针）存储在栈上作为管理信息数据管理实际类型数据。
+     * - RefCell 通过内部 unsafe 操作实现数据的可变性，为一个无论是否可变的类型（变量/值），**对外提供该类型的不可变引用和可变引用**。
      *
+     * ```rust
+     * // Rc与RefCell的结合使用，可以让rust变得像其他高级语言一样使用变量/值
+     * let s = Rc::new(RefCell::new(String::from("Hello World")));
+     * let s1 = s.clone();
+     * let s2 = s.clone();
+     * s1.borrow_mut().push_str(" ❌"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * s1.borrow_mut().push_str(" 2"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * println!("{s:?}");
+     * *s2.borrow_mut() = String::from("Hello World"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+     * println!("{s:?}");
+     * ```
+     * 
+     * 两者的结合流程认识 Rc<RefCell<T>>：
+     * - RefCell 为一个无论是否可变的类型（变量/值）提供不可变引用和可变引用，让数据减少借用规则的影响，让数据更容易被改变
+     * - Rc/Arc 为一个类型提供简化的生命周期管理（回收资源），让rust的变量达到传统GC语言指针引用的便捷
+     * Rc/Arc 结合 RefCell 后可以看成**无需手动管理生命周期（回收资源），并且可以随时获取不可变引用和可变引用的类型**
+     * 
+     * 
      *
+     * ### TODO 内部可变性的 Drop 的流程认识，与Rc和Arc对比认识
+     * 在 Rc/Arc 中，rust 通过**引用计数 (`reference counting`)**来简化不可变引用对应值的 Drop 实现。
+     * 在 Cell/RefCell 中，rust 又是通过什么来维护 Drop 的流程？
      */
 
     //  use std::cell::Cell;
@@ -305,4 +327,14 @@ fn main() {
     *p.name.borrow_mut() = String::from("M"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
     *p.name.borrow_mut() = String::from("N"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
     println!("{p:?}");
+
+    // Rc与RefCell的结合使用，可以让rust变得像其他高级语言一样使用变量/值
+    let s = Rc::new(RefCell::new(String::from("Hello World")));
+    let s1 = s.clone();
+    let s2 = s.clone();
+    s1.borrow_mut().push_str(" ❌"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    s1.borrow_mut().push_str(" 2"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    println!("{s:?}");
+    *s2.borrow_mut() = String::from("Hello World"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
+    println!("{s:?}");
 }
