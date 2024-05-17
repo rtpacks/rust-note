@@ -260,17 +260,122 @@ fn main() {
      * *s2.borrow_mut() = String::from("Hello World"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
      * println!("{s:?}");
      * ```
-     * 
+     *
      * 两者的结合流程认识 Rc<RefCell<T>>：
      * - RefCell 为一个无论是否可变的类型（变量/值）提供不可变引用和可变引用，让数据减少借用规则的影响，让数据更容易被改变
      * - Rc/Arc 为一个类型提供简化的生命周期管理（回收资源），让rust的变量达到传统GC语言指针引用的便捷
-     * Rc/Arc 结合 RefCell 后可以看成**无需手动管理生命周期（回收资源），并且可以随时获取不可变引用和可变引用的类型**
-     * 
-     * 
+     * Rc/Arc 结合 RefCell 后功能上可以看成**减少手动管理生命周期（回收资源）的步骤，并且可以随时获取不可变引用和可变引用的类型**，即能达到传统带GC语言变量的程度。
      *
-     * ### TODO 内部可变性的 Drop 的流程认识，与Rc和Arc对比认识
+     * #### 性能损耗
+     * 功能上 Rc/Arc 与 RefCell 的结合可以极大的降低生命周期管理和借用规则的复杂性，并且在性能上，这个组合也是非常高的。
+     * 大致相当于没有线程安全版本的 C++ std::shared_ptr 指针，事实上，C++ 这个指针的主要开销也在于原子性这个**并发原语**上，毕竟线程安全在哪个语言中开销都不小。
+     *
+     * #### 内存损耗
+     * Rc/Arc 与 RefCell 的结合相当于以下结构体，从对内存的影响来看，仅仅多分配了三个 usize/isize，并没有其它额外的负担。
+     * ```rust
+     * struct Wrapper<T> {
+     *     // Rc 数据
+     *     strong_count: usize,
+     *     weak_count: usize,
+     *
+     *     // Refcell 数据
+     *     borrow_count: isize,
+     *
+     *     // 包裹的数据
+     *     item: T,
+     * }
+     * ```
+     * #### CPU 损耗
+     * 从 CPU 来看，损耗如下：
+     *
+     * - 对 Rc<T> 解引用是免费的（编译期自动转换），但是 `*` 带来的间接取值并不免费
+     * - 克隆 Rc<T> 需要将当前的引用计数跟 0 和 usize::Max 进行一次比较，然后将计数值加 1
+     * - 释放（drop） Rc<T> 需要将计数值减 1， 然后跟 0 进行一次比较
+     * - 对 RefCell 进行不可变借用，需要将 isize 类型的借用计数加 1，然后跟 0 进行比较
+     * - 对 RefCell 的不可变借用进行释放，需要将 isize 减 1
+     * - 对 RefCell 的可变借用大致流程跟上面差不多，但是需要先跟 0 比较，然后再减 1
+     * - 对 RefCell 的可变借用进行释放，需要将 isize 加 1（存疑：为什么不是减1）
+     *
+     * https://course.rs/advance/smart-pointer/cell-refcell.html#cpu-%E6%8D%9F%E8%80%97
+     *
+     * 其实这些细节不必过于关注，只要知道 CPU 消耗也非常低，甚至编译器还会对此进行进一步优化！
+     *
+     * #### CPU 缓存 Miss
+     * 唯一需要担心的可能就是这种组合数据结构对于 CPU 缓存是否亲和，这个我们证明，只能提出来存在这个可能性，最终的性能影响还需要在实际场景中进行测试。
+     *
+     * 总之，分析这两者组合的性能还挺复杂的，大概总结下：
+     * - 从表面来看，它们带来的内存和 CPU 损耗都不大，但是由于 Rc 额外的引入了一次间接取值（`*`），在少数场景下可能会造成性能上的显著损失
+     * - CPU 缓存可能也不够亲和
+     *
+     * ### 过 Cell::from_mut 解决借用冲突
+     *
+     * 使用迭代器时，如果恰巧碰上需要修改迭代器内的数据，就会遇到两种情况，这两种情况都不能通过借用规则的检查：
+     * - 不可变引用与可变引用一起使用：`iter()` 与 修改迭代器数据
+     * - 可变引用与可变引用一起使用：`iter_mut()` 与 修改迭代器数据
+     *
+     * ```rust
+     * let mut nums = vec![1, 2, 3, 4];
+     * let mut i = 0;
+     * for num in nums.iter().filter(|x| **x > 2) {
+     *     // nums[i] = *num; 错误的，不能同时使用可变引用与不可变引用
+     *     // i += 1;
+     * }
+     * let mut i = 0;
+     * for num in nums.iter_mut().filter(|x| **x > 2) {
+     *     // nums[i] = *num; 错误的，不能同时使用多个可变借用
+     *     // i += 1;
+     * }
+     * ```
+     *
+     * 对于迭代器出现的这两个场景，多个不可变引用与不可引用和可变引用同时使用的问题，可以**通过索引解决**，即不使用迭代器就不会出现问题：
+     * ```rust
+     * let mut nums = vec![1, 2, 3, 4];
+     * let mut i = 0;
+     * for j in 0..nums.len() {
+     *     if (nums[j] > 2) {
+     *         nums[i] = nums[j];
+     *         i += 1;
+     *     }
+     * }
+     * ```
+     *
+     * 但是使用索引就违背迭代器的初衷了，毕竟迭代器会让代码更加简洁。此时可以使用 `from_mut` 方法来解决这个问题：
+     * ```rust
+     * // 使用索引不符合迭代器的初衷，迭代器能够简化代码
+     * // 此时可以通过 `Cell` 解决这个问题，因此 Cell 可以提供 set get 方法设置数据。
+     * let mut nums = vec![1, 2, 3, 4];
+     * // cell_slice 是一个 Cell 的引用类型，内部元素是切片
+     * let nums_slice = &mut nums[..];
+     * let cell_slice = Cell::from_mut(&mut nums[..]);
+     *
+     * // as_slice() 方法返回的是一个不可变的切片，这意味着返回的切片不能被修改，也就是nums不能被修改。
+     * // let cell_slice_ref = Cell::from_mut(&mut nums.as_slice());
+     *
+     * let mut nums = vec![1, 2, 3, 4];
+     * // 内部元素是切片引用
+     * let cell_slice_ref = Cell::from_mut(&mut nums.as_slice());
+     *
+     * // 将 nums 中的元素变为 Cell 类型，就能够访问和设置元素数据
+     * // 手动声明形式
+     * let slice_nums = vec![Cell::new(1), Cell::new(2), Cell::new(3), Cell::new(4)];
+     *
+     * // Cell::from_mut 与 Cell::as_slice_of_cells 结合生成，两种写法
+     * let mut nums = vec![1, 2, 3, 4];
+     * let cell_slice = Cell::from_mut(&mut nums[..]);
+     * let slice_cell = Cell::as_slice_of_cells(cell_slice);
+     * let slice_cell = Cell::from_mut(&mut nums[..]).as_slice_of_cells();
+     *
+     * let i = 0;
+     * for num in slice_cell.iter().filter(|x| (**x).get() > 2) {
+     *     slice_cell[i].set(num.get()); // 通过slice_cell改变nums的数据，避免直接修改nums让不可变引用和可变引用同时存在，导致借用规则检查失败
+     * }
+     * println!("{nums:?}");
+     * ```
+     *
+     * ### 内部可变性的 Drop 的流程认识，与 Rc 和 Arc 对比
      * 在 Rc/Arc 中，rust 通过**引用计数 (`reference counting`)**来简化不可变引用对应值的 Drop 实现。
      * 在 Cell/RefCell 中，rust 又是通过什么来维护 Drop 的流程？
+     * Cell/RefCell 的 Drop 流程很简单，与 rust 普通的堆上值是一样的释放流程。
      */
 
     //  use std::cell::Cell;
@@ -312,6 +417,7 @@ fn main() {
 
     let mut s = String::from("Hello World");
     let s_ref = RefCell::new(s);
+    drop(s_ref); // 释放资源
 
     // 通过 RefCell，让一个结构体既有不可变字段，也有可变字段
     #[derive(Debug)]
@@ -337,4 +443,60 @@ fn main() {
     println!("{s:?}");
     *s2.borrow_mut() = String::from("Hello World"); // RefCell 记录一次可变引用，不可变引用是0，可变引用是1，符合借用规则，正常运行。borrow_mut没有接收者意味着可变引用使用后被释放，可变引用计数归0
     println!("{s:?}");
+
+    // 使用迭代器时，如果恰巧碰上需要修改迭代器内的数据，就会遇到两种情况：
+    // 不可变引用与可变引用一起使用 iter() 与 修改迭代器数据
+    // 可变引用与可变引用一起使用 iter_mut() 与 修改迭代器数据
+    // 这两种情况都不能通过借用规则的检查
+    let mut nums = vec![1, 2, 3, 4];
+    let mut i = 0;
+    for num in nums.iter().filter(|x| **x > 2) {
+        // nums[i] = *num; 错误的，不能同时使用可变引用与不可变引用
+        // i += 1;
+    }
+    let mut i = 0;
+    for num in nums.iter_mut().filter(|x| **x > 2) {
+        // nums[i] = *num; 错误的，不能同时使用多个可变借用
+        // i += 1;
+    }
+
+    // 对于迭代器出现的这两个场景，多个不可变引用与不可引用和可变引用同时使用的问题，可以通过索引来解决
+    let mut nums = vec![1, 2, 3, 4];
+    let mut i = 0;
+    for j in 0..nums.len() {
+        if (nums[j] > 2) {
+            nums[i] = nums[j];
+            i += 1;
+        }
+    }
+
+    // 使用索引不符合迭代器的初衷，迭代器能够简化代码
+    // 此时可以通过 `Cell` 解决这个问题，因此 Cell 可以提供 set get 方法设置数据。
+    let mut nums = vec![1, 2, 3, 4];
+    // cell_slice 是一个 Cell 的引用类型，内部元素是切片
+    let nums_slice = &mut nums[..];
+    let cell_slice = Cell::from_mut(&mut nums[..]);
+
+    // as_slice() 方法返回的是一个不可变的切片，这意味着返回的切片不能被修改，也就是nums不能被修改。
+    // let cell_slice_ref = Cell::from_mut(&mut nums.as_slice());
+
+    let mut nums = vec![1, 2, 3, 4];
+    // 内部元素是切片引用
+    let cell_slice_ref = Cell::from_mut(&mut nums.as_slice());
+
+    // 将 nums 中的元素变为 Cell 类型，就能够访问和设置元素数据
+    // 手动声明形式
+    let slice_nums = vec![Cell::new(1), Cell::new(2), Cell::new(3), Cell::new(4)];
+
+    // Cell::from_mut 与 Cell::as_slice_of_cells 结合生成，两种写法
+    let mut nums = vec![1, 2, 3, 4];
+    let cell_slice = Cell::from_mut(&mut nums[..]);
+    let slice_cell = Cell::as_slice_of_cells(cell_slice);
+    let slice_cell = Cell::from_mut(&mut nums[..]).as_slice_of_cells();
+
+    let i = 0;
+    for num in slice_cell.iter().filter(|x| (**x).get() > 2) {
+        slice_cell[i].set(num.get()); // 通过slice_cell改变nums的数据，避免直接修改nums让不可变引用和可变引用同时存在，导致借用规则检查失败
+    }
+    println!("{nums:?}");
 }
