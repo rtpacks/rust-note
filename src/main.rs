@@ -2,6 +2,7 @@ use std::{
     borrow::{Borrow, BorrowMut},
     cell::{Cell, RefCell},
     os::raw,
+    ptr,
     rc::{Rc, Weak},
 };
 
@@ -92,12 +93,61 @@ fn main() {
      * *b.prev.borrow_mut() = Some(Rc::downgrade(&a));
      * println!("{:#?}", a);
      * ```
-     * 
+     *
      * 当使用到自引用时，只需要复制 `Rc` 指针即可。
      *
+     * `Rc + RefCell` 虽然可以解决问题，但是增加了许多类型标识，可读性受到很大的影响。
+     *
      * ### unsafe 操作
-     * 
-     * 
+     * 既然自引用受到借用规则的限制，那么可以通过绕过借用规则来实现自引用。绕过借用规则的最简单方式就是通过 unsafe。
+     *
+     * unsafe 中不操作 rust 的引用，而是直接存储/操作**裸指针**（原始指针），不再受到 Rust 借用规则和生命周期的限制，实现起来非常清晰、简洁。
+     *
+     * ```rust
+     * // 通过 unsafe 操作裸指针实现自引用
+     * struct SelfRef {
+     *     value: String,
+     *     pointer_to_value: *const String, // 该裸指针指向上面的 value
+     * }
+     *
+     * let mut selfRef = SelfRef {
+     *     value: String::from("Hello World"),
+     *     pointer_to_value: ptr::null(),
+     * };
+     * // 直接存储裸指针信息，引用转换裸指针需要类型标注，否则就是rust引用
+     * selfRef.pointer_to_value = &selfRef.value;
+     * // 操作裸指针取值时需要unsafe绕过借用规则和生命周期检查
+     * let pointer_to_value = unsafe { &(*selfRef.pointer_to_value) };
+     * println!("{}, {}", selfRef.value, pointer_to_value);
+     * ```
+     *
+     * `ptr::null()` 是不可变裸指针类型的空值，除了 `*const` 不可变裸指针类型外，还有一种 `*mut` 可变裸指针类型：
+     * ```rust
+     * // *mut 可变裸指针
+     * struct SelfRefMut {
+     *     value: String,
+     *     pointer_to_value: *mut String, // 该裸指针指向上面的 value
+     * }
+     * let mut selfRef = SelfRefMut {
+     *     value: String::from("Hello World"),
+     *     pointer_to_value: ptr::null_mut(),
+     * };
+     * selfRef.pointer_to_value = &mut selfRef.value;
+     *
+     * // *mut 无论是取值还是赋值，都需要在 unsafe 中操作
+     * let pointer_to_value = unsafe { &(*selfRef.pointer_to_value) };
+     * println!("{}, {}", selfRef.value, pointer_to_value);
+     * let pointer_to_vlaue = unsafe {
+     *     *selfRef.pointer_to_value = String::from("Hi");
+     *     &(*selfRef.pointer_to_value)
+     * };
+     * println!(
+     *     "{}, {}, {:?}",
+     *     selfRef.value, pointer_to_vlaue, selfRef.pointer_to_value
+     * );
+     * ```
+     *
+     *
      * TODO 等某一天使用到自引用结构时再来补齐
      */
 
@@ -124,4 +174,43 @@ fn main() {
     // 将 b 的 prev 指向 a
     *b.prev.borrow_mut() = Some(Rc::downgrade(&a));
     println!("{:#?}", a);
+
+    // 通过 unsafe 操作裸指针实现自引用
+    struct SelfRef {
+        value: String,
+        pointer_to_value: *const String, // 该裸指针指向上面的 value
+    }
+
+    let mut selfRef = SelfRef {
+        value: String::from("Hello World"),
+        pointer_to_value: ptr::null(),
+    };
+    // 直接存储裸指针信息，引用转换裸指针需要类型标注，否则就是rust引用
+    selfRef.pointer_to_value = &selfRef.value;
+    // 操作裸指针取值时需要unsafe绕过借用规则和生命周期检查
+    let pointer_to_value = unsafe { &(*selfRef.pointer_to_value) };
+    println!("{}, {}", selfRef.value, pointer_to_value);
+
+    // *mut 可变裸指针
+    struct SelfRefMut {
+        value: String,
+        pointer_to_value: *mut String, // 该裸指针指向上面的 value
+    }
+    let mut selfRef = SelfRefMut {
+        value: String::from("Hello World"),
+        pointer_to_value: ptr::null_mut(),
+    };
+    selfRef.pointer_to_value = &mut selfRef.value;
+
+    // *mut 无论是取值还是赋值，都需要在 unsafe 中操作
+    let pointer_to_value = unsafe { &(*selfRef.pointer_to_value) };
+    println!("{}, {}", selfRef.value, pointer_to_value);
+    let pointer_to_vlaue = unsafe {
+        *selfRef.pointer_to_value = String::from("Hi");
+        &(*selfRef.pointer_to_value)
+    };
+    println!(
+        "{}, {}, {:?}",
+        selfRef.value, pointer_to_vlaue, selfRef.pointer_to_value
+    );
 }
