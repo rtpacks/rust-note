@@ -179,6 +179,7 @@ fn main() {
      * ```rust
      * // 不能安全移动的类型，即在内存中移动数据可能会导致意外的副作用，通常需要 PhantomPinned 标识字段
      * // 只要有一个字段被标示为 `!Unpin`（一般都是 PhantomPinned 作为值），那么整个结构体就实现 `!Unpin` 特征
+     * #[derive(Debug)]
      * struct SelfRefNotUnpin {
      *     value: String,
      *     pointer_to_value: *mut String,
@@ -200,15 +201,19 @@ fn main() {
      *     let mut self_ref_not_unpin_mutref = Pin::get_unchecked_mut(self_ref_not_unpin_pin_mutref);
      *     self_ref_not_unpin_mutref.pointer_to_value = &mut self_ref_not_unpin_mutref.value
      * }
+     *
+     * // 取值还是要通过unsafe操作
+     * let pointer_to_value = unsafe { &(*self_ref_not_unpin.pointer_to_value) };
+     * println!("{:?}, {}", self_ref_not_unpin, pointer_to_value);
      * ```
-     * 
+     *
      * 使用Pin后，并不意味着就不需要使用 unsafe 操作，Pin 只是将由于 `!Unpin` 在内存移动可能引发副作用的移动限制了，不会移动就不发生 `!Unpin` 的副作用。
      * 至于在原内存空间修改值，还是需要 unsafe 操作获取被 Pin 包括的值，此时的 unsafe 代码是安全的，因为修改内部的值不会导致整体的内存地址发生变化
      *
      *
      * ### 总结
      * Pin 是一个智能指针（结构体），`Unpin` 和 `!Unpin` 则是特征。
-     * 
+     *
      * TODO 等某一天使用到自引用结构时再来补齐
      *
      */
@@ -278,6 +283,7 @@ fn main() {
 
     // 不能安全移动的类型，即在内存中移动数据可能会导致意外的副作用，通常需要 PhantomPinned 标识字段
     // 只要有一个字段被标示为 `!Unpin`（一般都是 PhantomPinned 作为值），那么整个结构体就实现 `!Unpin` 特征
+    #[derive(Debug)]
     struct SelfRefNotUnpin {
         value: String,
         pointer_to_value: *mut String,
@@ -299,4 +305,8 @@ fn main() {
         let mut self_ref_not_unpin_mutref = Pin::get_unchecked_mut(self_ref_not_unpin_pin_mutref);
         self_ref_not_unpin_mutref.pointer_to_value = &mut self_ref_not_unpin_mutref.value
     }
+
+    // 取值还是要通过unsafe操作
+    let pointer_to_value = unsafe { &(*self_ref_not_unpin.pointer_to_value) };
+    println!("{:?}, {}", self_ref_not_unpin, pointer_to_value);
 }
