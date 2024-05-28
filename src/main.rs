@@ -46,11 +46,38 @@ fn main() {
      * main thread, index = 4
      * ```
      *
-     * ### join 等待线程结束
-     * 在使用 spawn 创建线程中，由于主线程结束，导致依赖于主线程的新创建线程并没有执行完整。
-     * 为了能让线程安全的结束执行，需要保证**被依赖线程**在依赖线程后结束，使用 join 可以达到目的。
+     * ### 线程的结束方式
+     * main 线程是程序的主线程，一旦结束则程序随之结束，同时各个子线程也将被强行终止。
+     * 如果父线程不是 main 线程，那么父线程的结束后子线程是继续运行还是被强行终止？
      *
-     * join 可以阻塞当前线程，直到 join 方法调用位置前的所有线程执行完成后才会解除当前线程的阻塞，同时 join 方法调用位置前的所有线程是不确定的轮换执行。
+     * 答案是**当父线程不是 main 线程时，父线程的结束不会强制终止子线程，只有线程的代码执行完，线程才会自动结束**。
+     * 这是因为虽然在系统编程中，操作系统提供了直接杀死线程的接口，但是**粗暴地终止一个线程可能会引发资源没有释放、状态混乱等不可预期的问题**，所以 Rust 并没有提供功能。
+     *
+     * 因此**非主线程的子线程的代码不会执行完时(阻塞、死循环)，子线程就不会结束，此时只有主动关闭或结束主线程才能关闭子线程**。
+     *
+     * **阻塞和死循环**
+     * - 线程的任务是一个循环 IO 读取，任务流程类似：IO 阻塞，等待读取新的数据 -\> 读到数据，处理完成 -\> 继续阻塞等待 ··· -\> 收到 socket 关闭的信号 -\> 结束线程，在此过程中，绝大部分时间线程都处于阻塞的状态，因此虽然看上去是循环，CPU 占用其实很小，也是网络服务中最常见的模型
+     * - 线程的任务是一个循环，没有任何阻塞（也不包括休眠），此时如果没有设置终止条件，该线程将持续跑满一个 CPU 核心，并且不会被终止，直到 main 线程的结束
+     *
+     * ```rust
+     * // 线程的关闭方式
+     * let handle = thread::spawn(|| {
+     *     thread::spawn(|| loop {
+     *         println!("sub sub thread running");
+     *     });
+     *     println!("sub thread end");
+     * });
+     * handle.join().unwrap();
+     *
+     * // 睡眠一段时间，看子线程创建的子线程是否还在运行
+     * thread::sleep(Duration::from_millis(10));
+     * ```
+     *
+     * ### join 等待线程结束
+     * 在使用 spawn 创建线程中，由于主线程结束，导致依赖主线程的新创建线程并没有执行完整。
+     * 为了能让线程安全的结束执行，需要保证**主线程**在依赖线程后结束，使用 join 可以达到目的。
+     *
+     * join 可以阻塞当前线程，直到 join 方法调用位置前的所有的**同级线程**执行完成后才会解除当前线程的阻塞，同时 join 方法调用位置前的所有**同级线程**是不确定的轮换执行。
      *
      * ```rust
      * // 使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开限制
@@ -65,47 +92,74 @@ fn main() {
      *     }
      * });
      * handle1.join().unwrap(); // spawned1 和 spawned2 不确定的轮换执行，直到两者结束后才会解除当前线程的阻塞限制
-     *
      * for k in 1..5 {
      *     println!("main thread, index = {}", k);
      *     thread::sleep(Duration::from_millis(1));
      * }
      * ```
      *
+     * ### move 和多线程
+     * 线程的启动时间点和结束时间点是不确定的，与代码的创建点无关。
+     * 由于这种无序和不确定性，**被依赖线程**不一定在依赖线程后结束，换句话说，存在**被依赖线程结束运行，而依赖线程仍在运行**的情况。
      *
+     * 这意味依赖线程访问**被依赖线程**的环境时，需要有一个限制条件：
+     * 当依赖线程的闭包访问被依赖线程的变量时，需要将被依赖线程的变量所有权转移到依赖线程的闭包内，否则容易出现被依赖线程结束运行后变量被释放，而依赖线程还在访问该变量的问题。
      *
-     *
+     * 因此使用 move 关键字拿走访问变量的所有权，被依赖线程就无法再使用该变量，也就是不会再释放该变量的值。
+     * ```rust
+     * let v = vec![1, 2, 3];
+     * let handle = thread::spawn(move || {
+     *     println!("spawned thread, index = {:?}", v);
+     * });
+     * handle.join().unwrap();
+     * ```
      *
      *
      */
 
-    // 初步使用 thread
+    // 一、初步使用 thread
     // thread::spawn(|| {
     //     for i in 1..10 {
     //         println!("spawned thread, index = {}", i);
     //     }
     // });
-
     // for j in 1..5 {
     //     println!("main thread, index = {}", j);
     //     thread::sleep(Duration::from_millis(1)); // thread::sleep() 可以强制线程停止执行一段时间
     // }
 
-    // 使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开限制
-    let handle1 = thread::spawn(|| {
-        for i in 1..10 {
-            println!("spawned1 thread, index = {}", i);
-        }
-    });
-    let handle2 = thread::spawn(|| {
-        for j in 1..10 {
-            println!("spawned2 thread, index = {}", j);
-        }
-    });
-    handle1.join().unwrap();
+    // 二、线程的关闭方式
+    // let handle = thread::spawn(|| {
+    //     thread::spawn(|| loop {
+    //         println!("sub sub thread running");
+    //     });
+    //     println!("sub thread end");
+    // });
+    // handle.join().unwrap();
+    // 睡眠一段时间，看子线程创建的子线程是否还在运行
+    // thread::sleep(Duration::from_millis(10));
 
-    for k in 1..5 {
-        println!("main thread, index = {}", k);
-        thread::sleep(Duration::from_millis(1));
-    }
+    // 三、使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开阻塞限制
+    // let handle1 = thread::spawn(|| {
+    //     for i in 1..10 {
+    //         println!("spawned1 thread, index = {}", i);
+    //     }
+    // });
+    // let handle2 = thread::spawn(|| {
+    //     for j in 1..10 {
+    //         println!("spawned2 thread, index = {}", j);
+    //     }
+    // });
+    // handle1.join().unwrap();
+    // for k in 1..5 {
+    //     println!("main thread, index = {}", k);
+    //     thread::sleep(Duration::from_millis(1));
+    // }
+
+    // 四、move 和闭包
+    // let v = vec![1, 2, 3];
+    // let handle = thread::spawn(move || {
+    //     println!("spawned thread, index = {:?}", v);
+    // });
+    // handle.join().unwrap();
 }
