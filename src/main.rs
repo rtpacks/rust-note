@@ -1,4 +1,9 @@
-use std::{thread, time::Duration};
+use std::{
+    cell::RefCell,
+    sync::{Arc, Barrier},
+    thread::{self, JoinHandle, LocalKey},
+    time::Duration,
+};
 
 fn main() {
     /*
@@ -119,16 +124,15 @@ fn main() {
      *
      * #### 创建合适的线程数量
      * 合适的线程数是提高并发性能的关键，并发性能关键在于 CPU 负载利用率的高低。
-     * 
+     *
      * 当任务是 CPU 密集型时，就算线程数超过了 CPU 核心数，也不能获得更好的性能，因为每个线程的任务都可以轻松让 CPU 的某个核心跑满，CPU 负载利用率的高，此时让线程数等于 CPU 核心数是最好的。
-     * 
+     *
      * 当任务大部分时间都处于阻塞状态时，就可以考虑增多线程数量，这样当某个线程处于阻塞状态时会被切走，系统运行其它的线程。
      * 典型就是网络 IO 操作，可以为每一个进来的用户连接创建一个线程去处理，该连接绝大部分时间都是处于 IO 读取阻塞状态，因此有限的 CPU 核心完全可以处理成百上千的用户连接线程。
      * 但事实上网络 IO 一般都不再使用多线程的方式了，毕竟操作系统的线程数是有限的，意味着并发数也很容易达到上限，而且过多的线程也会导致线程上下文切换的代价过大，使用 async/await 的 M:N 并发模型就没有这个烦恼。
-     * 
-     * 如果不确定任务是 CPU 密集型还是阻塞型，就需要通过测试来确定选择合适的线程数量。
-     * 
+     *
      * CPU 密集型任务尽量让线程数量等于 CPU 核心数，阻塞型任务可以选择 async/await 的 M:N 模型。
+     * 如果不确定任务是 CPU 密集型还是阻塞型，就需要通过测试来确定选择合适的线程数量。
      *
      * #### 多线程的开销
      * 阅读：https://course.rs/advance/concurrency-with-threads/thread.html#多线程的开销
@@ -138,51 +142,233 @@ fn main() {
      * - 大量读写可能会让内存带宽也成为瓶颈
      * - 读和写不一样，无锁数据结构的读往往可以很好地线性增长，但是写不行，因为写竞争太大
      *
+     * ### 线程屏障(Barrier)
+     * 在 Rust 中，可以使用 Barrier 让多个线程**都执行到某个位置**后，才继续一起往后执行，Barrier 对于需要所有线程同时开始执行某部分代码的场景非常有用。
+     *
+     * Rust 的 Barrier 类型是一个同步原语，Barrier 数量对应线程数量，如果两者不相等则会导致线程无法自动停止：
+     * ```rust
+     * let count = 6;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * let barrier = Arc::new(Barrier::new(7));
+     * for i in 0..count {
+     *     let b = barrier.clone();
+     *     handles.push(thread::spawn(move || {
+     *         println!("before wait, {i}");
+     *         b.wait();
+     *         println!("after wait, {i}");
+     *     }))
+     * }
+     * // 等待线程结束才允许关闭主线程
+     * for t in handles {
+     *     t.join().unwrap();
+     * }
+     * ```
+     *
+     * ### 线程局部变量（Thread Local Variable）
+     * 对于多线程编程，线程局部变量在一些场景下非常有用，而 Rust 通过标准库和三方库对此进行了支持。
+     *
+     * rust 标准库中提供 `thread_local!` 宏来生成线程内部变量 Thread Local Variable，有一点值得注意：
+     * `thread_local!` 宏声明线程局部存储 (Thread Local Storage, TLS) 变量需要使用 static 关键字，这是由于 TLS 变量的内存布局、线程安全性、编译时求值以及语义等原因决定的。
+     * `thread_local!` 宏本质上是在创建**一个静态变量**，所以在修改后，同一个线程访问的都是被修改后的值。
+     *
+     * - 内存布局：静态变量在程序的整个生命周期内存在，而不是在函数调用时创建和销毁，这使得 TLS 变量可以在多个函数和模块中访问
+     * - 线程安全：静态变量的初始化是线程安全的。当多个线程同时访问 TLS 变量时，每个线程都会得到自己独立的变量副本
+     * - 编译时求值：使用 static 可以让编译器在编译时就确定变量的内存布局和初始化表达式，这提高了性能和安全性
+     * - 语义：将 TLS 变量声明为 static 更加明确地表达了它们的作用域和生命周期
+     *
+     * 线程内部使用该变量的 with 方法获取变量值，每个新的线程访问它时，都会使用它的初始值作为开始：
+     * ```rust
+     * // 线程内部变量（Thread Local Variable），每个新的线程访问它时，都会使用它的初始值作为开始
+     * thread_local! {
+     *     static N: RefCell<i32> = RefCell::new(1);
+     * }
+     * thread_local!(static FOO: RefCell<u32> = RefCell::new(1)); // 另一种声明形式
+     *
+     * // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+     * N.with(|n| {
+     *     *n.borrow_mut() = 2;
+     * });
+     * let handle = thread::spawn(|| {
+     *     // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+     *     N.with(|n| {
+     *         *n.borrow_mut() = 4;
+     *     });
+     *     // 子线程打印的值是4
+     *     println!("{:?}", N.take());
+     * });
+     * handle.join().unwrap();
+     * // 主线程打印的值是2
+     * println!("{:?}", N.take());
+     * ```
+     *
+     * 此外还可以在结构中声明线程内部变量，与普通声明一样，每个新的线程访问它时都会使用它的初始值作为开始：
+     * ```rust
+     * // 结构体使用 thread_local! 创建线程局部变量
+     * struct Node {
+     *     value: i32,
+     * }
+     * impl Node {
+     *     thread_local! {
+     *         static V: RefCell<i32> = RefCell::new(1);
+     *     }
+     * }
+     * let handle = thread::spawn(|| {
+     *     // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+     *     Node::V.with(|v| {
+     *         *v.borrow_mut() = 4;
+     *         println!("{v:?}");
+     *     });
+     *     println!("{}", Node::V.take()); // 4，本质是一个全局变量，被修改后同一线程访问的数据是被修改后的值
+     * });
+     * handle.join().unwrap();
+     * println!("{}", Node::V.take()); // 1
+     * ```
+     *
+     * 当然结构体也可以通过引用的方式使用线程局部变量：
+     * ```rust
+     * thread_local! {
+     *     static M: RefCell<i32> = RefCell::new(1);
+     * }
+     * struct Person {
+     *     m: &'static LocalKey<RefCell<i32>>, // 结构体通过引用的方式使用线程局部变量
+     * }
+     * let handle = thread::spawn(|| {
+     *     let p = Person { m: &M }; // 与普通声明一样，每个新的线程访问它时都会使用它的初始值作为开始
+     *     p.m.with(|m| {
+     *         *m.borrow_mut() = 4;
+     *     });
+     *     println!("{:?}", p.m.take());
+     * });
+     * handle.join().unwrap();
+     * let p = Person { m: &M };
+     * println!("{:?}", p.m.take());
+     * ```
+     *
+     *
+     *
      */
 
     // 一、初步使用 thread
-    // thread::spawn(|| {
-    //     for i in 1..10 {
-    //         println!("spawned thread, index = {}", i);
-    //     }
-    // });
-    // for j in 1..5 {
-    //     println!("main thread, index = {}", j);
-    //     thread::sleep(Duration::from_millis(1)); // thread::sleep() 可以强制线程停止执行一段时间
-    // }
+    thread::spawn(|| {
+        for i in 1..10 {
+            println!("spawned thread, index = {}", i);
+        }
+    });
+    for j in 1..5 {
+        println!("main thread, index = {}", j);
+        thread::sleep(Duration::from_millis(1)); // thread::sleep() 可以强制线程停止执行一段时间
+    }
 
     // 二、线程的关闭方式
-    // let handle = thread::spawn(|| {
-    //     thread::spawn(|| loop {
-    //         println!("sub sub thread running");
-    //     });
-    //     println!("sub thread end");
-    // });
-    // handle.join().unwrap();
+    let handle = thread::spawn(|| {
+        thread::spawn(|| loop {
+            // println!("sub sub thread running");
+        });
+        println!("sub thread end");
+    });
+    handle.join().unwrap();
     // 睡眠一段时间，看子线程创建的子线程是否还在运行
-    // thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(10));
 
     // 三、使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开阻塞限制
-    // let handle1 = thread::spawn(|| {
-    //     for i in 1..10 {
-    //         println!("spawned1 thread, index = {}", i);
-    //     }
-    // });
-    // let handle2 = thread::spawn(|| {
-    //     for j in 1..10 {
-    //         println!("spawned2 thread, index = {}", j);
-    //     }
-    // });
-    // handle1.join().unwrap();
-    // for k in 1..5 {
-    //     println!("main thread, index = {}", k);
-    //     thread::sleep(Duration::from_millis(1));
-    // }
+    let handle1 = thread::spawn(|| {
+        for i in 1..10 {
+            println!("spawned1 thread, index = {}", i);
+        }
+    });
+    let handle2 = thread::spawn(|| {
+        for j in 1..10 {
+            println!("spawned2 thread, index = {}", j);
+        }
+    });
+    handle1.join().unwrap();
+    for k in 1..5 {
+        println!("main thread, index = {}", k);
+        thread::sleep(Duration::from_millis(1));
+    }
 
     // 四、move 和闭包
-    // let v = vec![1, 2, 3];
-    // let handle = thread::spawn(move || {
-    //     println!("spawned thread, index = {:?}", v);
-    // });
-    // handle.join().unwrap();
+    let v = vec![1, 2, 3];
+    let handle = thread::spawn(move || {
+        println!("spawned thread, index = {:?}", v);
+    });
+    handle.join().unwrap();
+
+    // 五、线程屏障 Barrier，Rust 的 Barrier 类型是一个同步原语。
+    // Barrier 数量对应线程数量，如果两者不相等则会导致线程无法自动停止。
+    // Barrier 对于需要所有线程同时开始执行某部分代码的场景非常有用。
+    let count = 6;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    let barrier = Arc::new(Barrier::new(count));
+    for i in 0..count {
+        let b = barrier.clone();
+        handles.push(thread::spawn(move || {
+            println!("before wait, {i}");
+            b.wait();
+            println!("after wait, {i}");
+        }))
+    }
+    // 等待线程结束才允许关闭主线程
+    for t in handles {
+        t.join().unwrap();
+    }
+
+    // 六、线程内部变量（Thread Local Variable）
+    thread_local! {
+        static N: RefCell<i32> = RefCell::new(1);
+    }
+    thread_local!(static FOO: RefCell<u32> = RefCell::new(1));
+
+    // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+    N.with(|n| {
+        *n.borrow_mut() = 2;
+    });
+    let handle = thread::spawn(|| {
+        // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+        N.with(|n| {
+            *n.borrow_mut() = 4;
+        });
+        // 子线程打印的值是4
+        println!("{:?}", N.take());
+    });
+    handle.join().unwrap();
+    // 主线程打印的值是2
+    println!("{:?}", N.take());
+
+    // 结构体使用 thread_local! 创建线程局部变量
+    struct Node {
+        value: i32,
+    }
+    impl Node {
+        thread_local! {
+            static V: RefCell<i32> = RefCell::new(1);
+        }
+    }
+    let handle = thread::spawn(|| {
+        // 使用该变量的 with 方法获取变量值，thread_local! 的本质是创建一个全局静态变量，所以在修改后，同一个线程访问的都是被修改后的值
+        Node::V.with(|v| {
+            *v.borrow_mut() = 4;
+            println!("{v:?}");
+        });
+        println!("{}", Node::V.take()); // 4，本质是一个全局变量，被修改后同一线程访问的数据是被修改后的值
+    });
+    handle.join().unwrap();
+    println!("{}", Node::V.take()); // 1
+
+    thread_local! {
+        static M: RefCell<i32> = RefCell::new(1);
+    }
+    struct Person {
+        m: &'static LocalKey<RefCell<i32>>, // 结构体通过引用的方式使用线程局部变量
+    }
+    let handle = thread::spawn(|| {
+        let p = Person { m: &M }; // 与普通声明一样，每个新的线程访问它时都会使用它的初始值作为开始
+        p.m.with(|m| {
+            *m.borrow_mut() = 4;
+        });
+        println!("{:?}", p.m.take());
+    });
+    handle.join().unwrap();
+    let p = Person { m: &M };
+    println!("{:?}", p.m.take());
 }
