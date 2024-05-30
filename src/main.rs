@@ -360,6 +360,40 @@ fn main() {
      * }
      * ```
      *
+     * ### 只调用一次的函数
+     * 如果希望一个变量无论被多少线程访问且无论访问的顺序如何，该变量只调用一次初始化代码，就需要用到 Once::call_one 方法。
+     * 回顾所学的两个特殊变量/类型，线程局部变量（Thread Local Variable）和 互斥锁 Mutex（Mutual Exclusion）：
+     * - 线程局部变量（Thread Local Variable）在每个线程访问时都会拷贝一份初始化的值，不适合做能被多线程访问，且变量只初始化一次的场景
+     * - Mutex 存储同一份数据，可以做到被多线程访问，且变量限制初始化一次的功能，这需要每个线程判断是否为**最初值**，比较麻烦
+     *
+     * 初始化的值一定是第一个访问的线程初始化的。
+     *
+     * 使用 Mutex 实现只初始化一次的功能：
+     * ```rust
+     * // 用 Mutex 做一个只初始化一次的变量，这需要每个线程在访问变量时判断是否为**最初值**
+     * // 这里有一点注意，当前程序中初始化的值一定是第一个访问的线程，也就是索引为0线程进行了唯一一次初始化流程
+     * const init_value: i32 = 1;
+     * let mutex = Arc::new(Mutex::new(init_value));
+     * let count = 5;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(5);
+     * for i in 0..count {
+     *     let _mutex = Arc::clone(&mutex);
+     *     handles.push(thread::spawn(move || {
+     *         let mut num = _mutex.lock().unwrap();
+     *         // 每个线程的初始化值不一样
+     *         if *num == init_value {
+     *             *num = i;
+     *         }
+     *     }))
+     * }
+     *
+     * for h in handles.into_iter() {
+     *     h.join().unwrap();
+     * }
+     * println!("{:?}", mutex.lock().unwrap());
+     * ```
+     *
+     * TODO 介绍 Once::call_once 函数
      *
      */
 
@@ -565,4 +599,26 @@ fn main() {
     for h in handles {
         h.join().unwrap();
     }
+
+    // 用 Mutex 做一个只初始化一次的变量，这需要每个线程在访问变量时判断是否为**最初值**
+    // 这里有一点注意，当前程序中初始化的值一定是第一个访问的线程，也就是索引为0线程进行了唯一一次初始化流程
+    const init_value: i32 = 1;
+    let mutex = Arc::new(Mutex::new(init_value));
+    let count = 5;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(5);
+    for i in 0..count {
+        let _mutex = Arc::clone(&mutex);
+        handles.push(thread::spawn(move || {
+            let mut num = _mutex.lock().unwrap();
+            // 每个线程的初始化值不一样
+            if *num == init_value {
+                *num = i;
+            }
+        }))
+    }
+
+    for h in handles.into_iter() {
+        h.join().unwrap();
+    }
+    println!("{:?}", mutex.lock().unwrap());
 }
