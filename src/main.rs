@@ -1,7 +1,8 @@
 use std::{
-    borrow::Borrow,
+    borrow::{Borrow, BorrowMut},
     cell::{Cell, RefCell},
-    sync::{Arc, Barrier, Mutex},
+    ops::Deref,
+    sync::{Arc, Barrier, Condvar, Mutex},
     thread::{self, JoinHandle, LocalKey},
     time::Duration,
 };
@@ -313,18 +314,51 @@ fn main() {
      *
      * #### Condvar（Condition Variable）
      * Condvar（Condition Variable）是一个同步原语，用于在多线程环境中协调线程的执行，可以视为一个信号。
-     * `Condvar` 的主要作用是让一个或多个线程等待某个条件成立，而**不占用 CPU 资源**。
-     * 当条件满足时，其他线程可以通知 `Condvar` 唤醒等待的线程。这种机制可以帮助提高多线程程序的性能和响应性。
-     * 
-     * 同样 Condvar 因为用于多线程，所以常常和 **Arc** 搭配使用：
-     * 
-     * TODO
-     * 
+     *
+     * `Condvar` 可以阻塞一个或多个线程，让线程等待某个信号发出后继续执行，因此具有阻塞性的 `Condvar` **不占用 CPU 资源**。
+     * 当 `Condvar` 信号发出时，可以唤醒等待的线程，让线程继续执行。这种机制可以帮助提高多线程程序的性能和响应性。
+     *
+     * `Condvar` 通常配合 while 使用。while 一直循环，condvar wait 等待条件不满足时阻塞执行，不占用 CPU 资源。
+     * 当条件满足时，`Condvar` 唤醒等待的线程，while 循环继续执行。
+     *
+     * 因为用于多线程，并且阻塞需要给定条件和解除信号，所以 Condvar 所以常常和 **Arc、Mutex** 搭配使用。
+     *
      * #### Mutex 和 Condvar
-     * `Condvar`（Condition Variable）与 `Mutex` （Mutual Exclusion）一起使用，允许线程等待特定条件成立，并在条件满足时被唤醒。
+     * `Condvar`（Condition Variable）与 `Mutex` （Mutual Exclusion）一起使用，允许线程阻塞等待特定条件成立，并在条件满足时被唤醒。
      * - 等待特定条件成立，即线程（多个线程）访问某一个数据并将其作为条件，用到 Mutex
      * - 在条件满足时发出信号，唤醒等待的线程，用到 Condvar
-     * 
+     *
+     *
+     * ```rust
+     * let count = 5;
+     * let pair = Arc::new((Mutex::new(0), Condvar::new()));
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * for i in 0..count {
+     *     let _pair = Arc::clone(&pair);
+     *
+     *     handles.push(thread::spawn(move || {
+     *         // 不应该在外部尝试解构 _pair，而是直接在闭包内部使用它
+     *         let (mutex, condvar) = &*_pair;
+     *         let mut single = mutex.lock().unwrap();
+     *         if i == 4 {
+     *             *single = 4;
+     *             condvar.notify_all();
+     *         }
+     *
+     *         while *single != 4 {
+     *             // 当条件不满足时进入循环，被 condvar.wait 阻塞，当 condvar.notify 发出信号时，改变 single
+     *             // 此时线程执行，while 循环不再符合条件，代码继续往下执行
+     *             single = condvar.wait(single).unwrap();
+     *         }
+     *
+     *         println!("condvar index = {i}");
+     *     }))
+     * }
+     * // 等待所有线程完成
+     * for h in handles {
+     *     h.join().unwrap();
+     * }
+     * ```
      *
      *
      */
@@ -498,4 +532,37 @@ fn main() {
         h.join().unwrap();
     }
     println!("mutex.lock().unwrap() = {:?}", mutex.lock().unwrap());
+
+    // Condvar（Condition Variable）是一个同步原语，用于在多线程环境中协调线程的执行，可以视为一个信号。
+    // `Condvar` 的主要作用是让一个或多个线程等待某个条件成立，而**不占用 CPU 资源**，通常配合 while 使用。
+    // 让 while 一直循环，condvar wait 等待条件不满足时阻塞执行，因此不占用 CPU 资源。
+    // 当条件满足时，其他线程可以通知 `Condvar` 唤醒等待的线程，while循环继续执行。这种机制可以帮助提高多线程程序的性能和响应性。
+    let count = 5;
+    let pair = Arc::new((Mutex::new(0), Condvar::new()));
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    for i in 0..count {
+        let _pair = Arc::clone(&pair);
+
+        handles.push(thread::spawn(move || {
+            // 不应该在外部尝试解构 _pair，而是直接在闭包内部使用它
+            let (mutex, condvar) = &*_pair;
+            let mut single = mutex.lock().unwrap();
+            if i == 4 {
+                *single = 4;
+                condvar.notify_all();
+            }
+
+            while *single != 4 {
+                // 当条件不满足时进入循环，被 condvar.wait 阻塞，当 condvar.notify 发出信号时，改变 single
+                // 此时线程执行，while 循环不再符合条件，代码继续往下执行
+                single = condvar.wait(single).unwrap();
+            }
+
+            println!("condvar index = {i}");
+        }))
+    }
+    // 等待所有线程完成
+    for h in handles {
+        h.join().unwrap();
+    }
 }
