@@ -1,6 +1,7 @@
 use std::{
+    borrow::Borrow,
     cell::{Cell, RefCell},
-    sync::{Arc, Barrier},
+    sync::{Arc, Barrier, Mutex},
     thread::{self, JoinHandle, LocalKey},
     time::Duration,
 };
@@ -278,6 +279,53 @@ fn main() {
      *
      * 最终可以得到每个线程的线程局部变量的值的总和。
      *
+     * ### 条件变量控制线程的挂起和执行
+     * **条件变量(Condition Variables)** 经常和 **Mutex** 一起使用，可以让**线程挂起**，直到某个条件发生后再继续执行。
+     *
+     * #### Mutex（Mutual Exclusion）
+     * Mutex 是一个互斥锁（Mutual Exclusion），同时是一个同步原语，用于在多线程环境中**保护共享数据**。
+     * 当多个线程需要访问同一数据时，Mutex确保任何时刻只有一个线程可以访问该数据，从而防止数据竞争和不一致的问题。
+     *
+     * 使用 Mutex 时，需要先锁定它访问数据，然后再解锁让其他线程可以访问该数据。
+     * 锁定和解锁的过程通常是自动的，通过 Rust 的作用域管理来实现。当 Mutex 的锁超出作用域时，它会自动释放。
+     *
+     * 不同于线程局部变量的每一个线程都有单独的数据拷贝，**Mutex 用于多线程访问同一个实例**，因为用于多线程，所以常常和 **Arc** 搭配使用：
+     * ```rust
+     * // Mutex 需要手动上锁，超过作用于后自动解锁
+     * let count = 5;
+     * let mutex = Arc::new(Mutex::new(Cell::new(1)));
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * for i in 0..count {
+     *     let _mutex = Arc::clone(&mutex);
+     *     handles.push(thread::spawn(move || {
+     *         // 上锁，其他线程不能访问该数据
+     *         let cell = _mutex.lock().unwrap();
+     *         cell.set(i.into())
+     *         // 超出作用域后自动解锁
+     *     }))
+     * }
+     * // 等待所有线程完成
+     * for h in handles {
+     *     h.join().unwrap();
+     * }
+     * println!("mutex.lock().unwrap() = {:?}", mutex.lock().unwrap());
+     * ```
+     *
+     * #### Condvar（Condition Variable）
+     * Condvar（Condition Variable）是一个同步原语，用于在多线程环境中协调线程的执行，可以视为一个信号。
+     * `Condvar` 的主要作用是让一个或多个线程等待某个条件成立，而**不占用 CPU 资源**。
+     * 当条件满足时，其他线程可以通知 `Condvar` 唤醒等待的线程。这种机制可以帮助提高多线程程序的性能和响应性。
+     * 
+     * 同样 Condvar 因为用于多线程，所以常常和 **Arc** 搭配使用：
+     * 
+     * TODO
+     * 
+     * #### Mutex 和 Condvar
+     * `Condvar`（Condition Variable）与 `Mutex` （Mutual Exclusion）一起使用，允许线程等待特定条件成立，并在条件满足时被唤醒。
+     * - 等待特定条件成立，即线程（多个线程）访问某一个数据并将其作为条件，用到 Mutex
+     * - 在条件满足时发出信号，唤醒等待的线程，用到 Condvar
+     * 
+     *
      *
      */
 
@@ -430,4 +478,24 @@ fn main() {
         .into_iter()
         .reduce(|acc, item| Cell::new(acc.get() + item.get()));
     println!("{:?}", total.unwrap());
+
+    // 不同于线程局部变量的每一个线程都有单独的数据拷贝，Mutex 用于多线程访问同一个实例，因为用于多线程，所以常常和 Arc 搭配使用
+    // Mutex 需要手动上锁，超过作用于后自动解锁
+    let count = 5;
+    let mutex = Arc::new(Mutex::new(Cell::new(1)));
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    for i in 0..count {
+        let _mutex = Arc::clone(&mutex);
+        handles.push(thread::spawn(move || {
+            // 上锁，其他线程不能访问该数据
+            let cell = _mutex.lock().unwrap();
+            cell.set(i.into())
+            // 超出作用域后自动解锁
+        }))
+    }
+    // 等待所有线程完成
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("mutex.lock().unwrap() = {:?}", mutex.lock().unwrap());
 }
