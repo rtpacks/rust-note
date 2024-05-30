@@ -1,9 +1,11 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     sync::{Arc, Barrier},
     thread::{self, JoinHandle, LocalKey},
     time::Duration,
 };
+
+use thread_local::ThreadLocal;
 
 fn main() {
     /*
@@ -244,6 +246,37 @@ fn main() {
      * println!("{:?}", p.m.take());
      * ```
      *
+     * 线程中对 FOO 的使用是通过借用的方式，如果需要每个线程独自获取它的拷贝，最后进行汇总，`thread_local!` 宏就不太满足需求了。
+     * 借助第三方库 thread-local 很容易实现：https://course.rs/advance/concurrency-with-threads/thread.html#三方库-thread-local
+     *
+     * ```rust
+     * // 使用第三方包 thread_local
+     * // 为了便于修改基础数据，使用 Cell
+     * // let tls: Arc<ThreadLocal<Cell<i32>>> = Arc::new(ThreadLocal::new());
+     * let tls = Arc::new(ThreadLocal::<Cell<i32>>::new());
+     * // 创建多个线程，每个线程更新第三方包生成的线程局部变量（TLS），最后统计总和
+     * let count = 5;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * for i in 0..count {
+     *     let _tls = Arc::clone(&tls);
+     *     handles.push(thread::spawn(move || {
+     *         let cell = _tls.get_or(|| Cell::new(0));
+     *         cell.set(cell.get() + 1);
+     *     }))
+     * }
+     * // 等待所有的线程都执行完成
+     * for h in handles {
+     *     h.join().unwrap();
+     * }
+     * // 统计线程中的数据
+     * let tls = Arc::try_unwrap(tls).unwrap();
+     * let total = tls
+     *     .into_iter()
+     *     .reduce(|acc, item| Cell::new(acc.get() + item.get()));
+     * println!("{:?}", total.unwrap());
+     * ```
+     *
+     * 最终可以得到每个线程的线程局部变量的值的总和。
      *
      *
      */
@@ -371,4 +404,30 @@ fn main() {
     handle.join().unwrap();
     let p = Person { m: &M };
     println!("{:?}", p.m.take());
+
+    // 使用第三方包 thread_local
+    // 为了便于修改基础数据，使用 Cell
+    // let tls: Arc<ThreadLocal<Cell<i32>>> = Arc::new(ThreadLocal::new());
+    let tls = Arc::new(ThreadLocal::<Cell<i32>>::new());
+    // 创建多个线程，每个线程更新第三方包生成的线程局部变量（TLS），最后统计总和
+    let count = 5;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    for i in 0..count {
+        let _tls = Arc::clone(&tls);
+        handles.push(thread::spawn(move || {
+            let cell = _tls.get_or(|| Cell::new(0));
+            cell.set(cell.get() + 1);
+        }))
+    }
+    // 等待所有的线程都执行完成
+    for h in handles {
+        h.join().unwrap();
+    }
+    thread::sleep(Duration::from_millis(10));
+    // 统计线程中的数据
+    let tls = Arc::try_unwrap(tls).unwrap();
+    let total = tls
+        .into_iter()
+        .reduce(|acc, item| Cell::new(acc.get() + item.get()));
+    println!("{:?}", total.unwrap());
 }
