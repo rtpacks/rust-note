@@ -2,7 +2,7 @@ use std::{
     borrow::{Borrow, BorrowMut},
     cell::{Cell, RefCell},
     ops::Deref,
-    sync::{Arc, Barrier, Condvar, Mutex},
+    sync::{Arc, Barrier, Condvar, Mutex, Once},
     thread::{self, JoinHandle, LocalKey},
     time::Duration,
 };
@@ -366,7 +366,7 @@ fn main() {
      * - 线程局部变量（Thread Local Variable）在每个线程访问时都会拷贝一份初始化的值，不适合做能被多线程访问，且变量只初始化一次的场景
      * - Mutex 存储同一份数据，可以做到被多线程访问，且变量限制初始化一次的功能，这需要每个线程判断是否为**最初值**，比较麻烦
      *
-     * 初始化的值一定是第一个访问的线程初始化的。
+     * 除了 Mutex 外，只要是一个所有线程可以访问的位置，都可以做到只调用一次初始化的功能。并且初始化的值一定是第一个访问的线程初始化的。
      *
      * 使用 Mutex 实现只初始化一次的功能：
      * ```rust
@@ -393,7 +393,47 @@ fn main() {
      * println!("{:?}", mutex.lock().unwrap());
      * ```
      *
-     * TODO 介绍 Once::call_once 函数
+     * 不确定顺序的线程：
+     * ```rust
+     * let mutex = Arc::new(Mutex::new(init_value));
+     * let mutex1 = Arc::clone(&mutex);
+     * let mutex2 = Arc::clone(&mutex);
+     * let mut handle = thread::spawn(move || {
+     *     let mut num = mutex1.lock().unwrap();
+     *     if *num == init_value {
+     *         *num = 10
+     *     }
+     * });
+     * let mut handle2 = thread::spawn(move || {
+     *     let mut num = mutex2.lock().unwrap();
+     *     if *num == init_value {
+     *         *num = 20
+     *     }
+     * });
+     * handle.join().unwrap();
+     * println!("{}", mutex.lock().unwrap()); // 10 OR 20
+     * ```
+     *
+     * 使用 Mutex 做只调用一次初始化函数的功能，除了需要初始化代码，还需要手动判断是否已初始化的逻辑。`Once::call_once` 可以减少手动判断的步骤。
+     *
+     *
+     * ```rust
+     * // Once::call_once，只调用一次的函数
+     * static INIT: Once = Once::new();
+     * let mutex = Arc::new(Mutex::new(init_value));
+     * let mutex1 = Arc::clone(&mutex);
+     * let mutex2 = Arc::clone(&mutex);
+     * let mut handle = thread::spawn(move || {
+     *     let mut num = mutex1.lock().unwrap();
+     *     INIT.call_once(move || *num = 10);
+     * });
+     * let mut handle2 = thread::spawn(move || {
+     *     let mut num = mutex2.lock().unwrap();
+     *     INIT.call_once(move || *num = 20);
+     * });
+     * handle.join().unwrap();
+     * println!("{}", mutex.lock().unwrap());
+     * ```
      *
      */
 
@@ -605,20 +645,53 @@ fn main() {
     const init_value: i32 = 1;
     let mutex = Arc::new(Mutex::new(init_value));
     let count = 5;
-    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(5);
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
     for i in 0..count {
         let _mutex = Arc::clone(&mutex);
         handles.push(thread::spawn(move || {
             let mut num = _mutex.lock().unwrap();
             // 每个线程的初始化值不一样
             if *num == init_value {
-                *num = i;
+                *num = i as i32;
             }
         }))
     }
-
     for h in handles.into_iter() {
         h.join().unwrap();
     }
     println!("{:?}", mutex.lock().unwrap());
+
+    let mutex = Arc::new(Mutex::new(init_value));
+    let mutex1 = Arc::clone(&mutex);
+    let mutex2 = Arc::clone(&mutex);
+    let mut handle = thread::spawn(move || {
+        let mut num = mutex1.lock().unwrap();
+        if *num == init_value {
+            *num = 10
+        }
+    });
+    let mut handle2 = thread::spawn(move || {
+        let mut num = mutex2.lock().unwrap();
+        if *num == init_value {
+            *num = 20
+        }
+    });
+    handle.join().unwrap();
+    println!("{}", mutex.lock().unwrap()); // 10 OR 20
+
+    // Once::call_once，只调用一次的函数
+    static INIT: Once = Once::new();
+    let mutex = Arc::new(Mutex::new(init_value));
+    let mutex1 = Arc::clone(&mutex);
+    let mutex2 = Arc::clone(&mutex);
+    let mut handle = thread::spawn(move || {
+        let mut num = mutex1.lock().unwrap();
+        INIT.call_once(move || *num = 10);
+    });
+    let mut handle2 = thread::spawn(move || {
+        let mut num = mutex2.lock().unwrap();
+        INIT.call_once(move || *num = 20);
+    });
+    handle.join().unwrap();
+    println!("{}", mutex.lock().unwrap());
 }
