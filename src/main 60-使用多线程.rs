@@ -86,10 +86,10 @@ fn main() {
      * 在使用 spawn 创建线程中，由于主线程结束，导致依赖主线程的新创建线程并没有执行完整。
      * 为了能让线程安全的结束执行，需要保证**主线程**在依赖线程后结束，使用 join 可以达到目的。
      *
-     * join 可以阻塞当前线程，直到 join 方法调用位置前的所有的**同级线程**执行完成后才会解除当前线程的阻塞，同时 join 方法调用位置前的所有**同级线程**是不确定的轮换执行。
+     * join 可以阻塞当前线程，直到调用 join 方法的线程执行完成后才会解除当前线程的阻塞。
      *
      * ```rust
-     * // 使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开限制
+     * // 使用 join，可以使当前线程阻塞，直到调用 join 方法的线程执行完成后才会解除当前线程的阻塞
      * let handle1 = thread::spawn(|| {
      *     for i in 1..10 {
      *         println!("spawned1 thread, index = {}", i);
@@ -100,7 +100,7 @@ fn main() {
      *         println!("spawned2 thread, index = {}", j);
      *     }
      * });
-     * handle1.join().unwrap(); // spawned1 和 spawned2 不确定的轮换执行，直到两者结束后才会解除当前线程的阻塞限制
+     * handle1.join().unwrap(); // spawned1 和 spawned2 不确定的轮换执行
      * for k in 1..5 {
      *     println!("main thread, index = {}", k);
      *     thread::sleep(Duration::from_millis(1));
@@ -461,7 +461,7 @@ fn main() {
     // 睡眠一段时间，看子线程创建的子线程是否还在运行
     thread::sleep(Duration::from_millis(10));
 
-    // 三、使用 join，可以使当前线程阻塞，直到 join 调用前的所有线程执行完成后才会放开阻塞限制
+    // 三、使用 join，可以使当前线程阻塞，直到调用 join 方法的线程执行完成后才会解除当前线程的阻塞
     let handle1 = thread::spawn(|| {
         for i in 1..10 {
             println!("spawned1 thread, index = {}", i);
