@@ -62,14 +62,43 @@ fn main() {
      * - 由于通道内部是泛型实现，一旦类型被推导确定，该通道就只能传递对应类型的值，否则会导致类型错误。
      * - 接收消息的操作 rx.recv() 会阻塞当前线程，直到读取到值，或者通道被关闭
      * - 需要使用 move 将 tx 的所有权转移到子线程的闭包中
-     * 
+     *
      * send 方法返回一个 `Result<T,E>`，说明它有可能返回一个错误，例如接收者被 drop 导致**发送的值不会被任何人接收**，此时继续发送毫无意义，因此返回一个错误最为合适。
      * 同样的，对于 recv 方法来说，当发送者关闭时，它也会接收到一个错误，用于说明**不会再有任何值被发送过来**。
+     *
+     * #### 不阻塞的 try_recv
+     *
+     * recv方法在通道中没有消息时会阻塞当前线程，如果不希望阻塞线程，可以使用 try_recv，try_recv 会尝试接收一次消息，如果通道中没有消息，会立刻返回一个错误。
+     * ```rust
+     * // try_recv 会立即尝试接收一次消息，如果通道中没有消息则会返回一个错误
+     * let (tx, rx) = mpsc::channel();
+     * thread::spawn(move || {
+     *     tx.send(1);
+     * });
+     * match rx.try_recv() {
+     *     Ok(n) => println!("{n}"),
+     *     Err(e) => eprintln!("{}", e), // 在子线程未创建前，通道中没有信息，try_recv 返回 empty channel 错误
+     * }
+     * match rx.recv() {
+     *     Ok(n) => println!("{n}"),
+     *     Err(e) => eprintln!("{}", e), // 利用 recv 阻塞，区分两种类型的错误
+     * }
+     * match rx.try_recv() {
+     *     Ok(n) => println!("{n}"),
+     *     Err(e) => eprintln!("{}", e), // 在子线程结束后，通道被关闭，try_recv 返回 closed channel 错误
+     * }
+     * ```
+     * 由于子线程的创建需要时间，第一个 `match rx.try_recv` 执行时子线程的消息还未发出。因为消息没有发出，try_recv 在立即尝试读取一次消息后就会报错，返回 empty channel 错误。
+     * 当子线程创建成功且发送消息后，主线程会接收到 Ok(1) 的消息内容，紧接着子线程结束，发送者也随着被 drop，此时接收者又会报错，但是这次错误原因有所不同：closed channel 代表发送者已经被关闭。
      * 
-     * #### 不阻塞的 try_recv 
-     * TODO 
+     * #### 传输数据的所有权
+     * 使用通道来传输数据，一样要遵循 Rust 的所有权规则：
+     * - 若值的类型实现了 Copy 特征，则直接复制一份该值，然后传输
+     * - 若值没有实现 Copy 特征，则它的所有权会被**转移给接收端**，在发送端继续使用该值将报错
      * 
      * 
+     *
+     *
      *
      *
      *
@@ -85,5 +114,23 @@ fn main() {
 
         // tx.send(Some(1)); 错误，经过 `tx.send(1)` 后管道被推导为只能传送 i32 类型
     });
-    println!("{}", rx.recv().unwrap())
+    println!("{}", rx.recv().unwrap());
+
+    // try_recv 会立即尝试接收一次消息，如果通道中没有消息则会返回一个错误
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(1);
+    });
+    match rx.try_recv() {
+        Ok(n) => println!("{n}"),
+        Err(e) => eprintln!("{}", e), // 在子线程未创建前，通道中没有信息，try_recv 返回 empty channel 错误
+    }
+    match rx.recv() {
+        Ok(n) => println!("{n}"),
+        Err(e) => eprintln!("{}", e), // 利用 recv 阻塞，区分两种类型的错误
+    }
+    match rx.try_recv() {
+        Ok(n) => println!("{n}"),
+        Err(e) => eprintln!("{}", e), // 在子线程结束后，通道被关闭，try_recv 返回 closed channel 错误
+    }
 }
