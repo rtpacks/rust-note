@@ -1,4 +1,7 @@
-use std::{sync::mpsc, thread};
+use std::{
+    sync::mpsc::{self, Sender},
+    thread::{self, JoinHandle},
+};
 
 fn main() {
     /*
@@ -111,7 +114,7 @@ fn main() {
      *
      * #### 循环接收消息
      * 消息通道中的消息数量是不确定的，为了方便接收所有消息以及在通道关闭时自动停止接收者接收消息，rust 为接收者 Receiver 实现了可迭代特征协议(IntoIterator)。
-     * 
+     *
      * ```rust
      * impl<T> Iterator for IntoIter<T> {
      *     type Item = T;
@@ -129,7 +132,7 @@ fn main() {
      *     }
      * }
      * ```
-     * 
+     *
      * `rx.recv()` 阻塞当前线程直到发送者或通道关闭，结合迭代器说明可以对 `rx` 进行循环操作，即可取出通道内的所有消息。
      * ```rust
      * // Receiver 接收者实现了可迭代特征，可以使用 for 遍历 Receiver 接收者
@@ -156,7 +159,32 @@ fn main() {
      *     print!("{msg}");
      * }
      * ```
+     *
+     * #### 多发送者
+     * 发送者 Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据。
      * 
+     * 使用多发送者时，和在多线程中使用 Arc 一样，复制一份引用即可：
+     * ```rust
+     * // 使用多发送者，Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+     * let (tx, rx) = mpsc::channel();
+     * let count = 5;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * for i in 0..count {
+     *     // Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+     *     let _tx = Sender::clone(&tx);
+     *     handles.push(thread::spawn(move || {
+     *         _tx.send(i).unwrap();
+     *     }));
+     * }
+     * // 只有所有发送者释放后，消息通道才会因为没有发送者而关闭，进而释放 rx，这里需要在阻塞线程前主动释放 tx
+     * drop(tx);
+     * // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息，
+     * for msg in rx {
+     *     println!("{}", msg);
+     * }
+     * ```
+     *
+     *
      */
 
     //  创建消息通道，返回发送者、接收者元组（transmitter，receiver）
@@ -216,9 +244,26 @@ fn main() {
         Ok(msg) => println!("{msg}"),
         Err(e) => eprintln!("{e}"),
     }
-
     // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息
     for msg in rx {
-        print!("{msg}");
+        println!("{msg}");
+    }
+
+    // 使用多发送者，Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+    let (tx, rx) = mpsc::channel();
+    let count = 5;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    for i in 0..count {
+        // Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+        let _tx = Sender::clone(&tx);
+        handles.push(thread::spawn(move || {
+            _tx.send(i).unwrap();
+        }));
+    }
+    // 只有所有发送者释放后，消息通道才会因为没有发送者而关闭，进而释放 rx，这里需要在阻塞线程前主动释放 tx
+    drop(tx);
+    // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息，
+    for msg in rx {
+        println!("{}", msg);
     }
 }
