@@ -90,18 +90,73 @@ fn main() {
      * ```
      * 由于子线程的创建需要时间，第一个 `match rx.try_recv` 执行时子线程的消息还未发出。因为消息没有发出，try_recv 在立即尝试读取一次消息后就会报错，返回 empty channel 错误。
      * 当子线程创建成功且发送消息后，主线程会接收到 Ok(1) 的消息内容，紧接着子线程结束，发送者也随着被 drop，此时接收者又会报错，但是这次错误原因有所不同：closed channel 代表发送者已经被关闭。
-     * 
+     *
      * #### 传输数据的所有权
      * 使用通道来传输数据，一样要遵循 Rust 的所有权规则：
      * - 若值的类型实现了 Copy 特征，则直接复制一份该值，然后传输
      * - 若值没有实现 Copy 特征，则它的所有权会被**转移给接收端**，在发送端继续使用该值将报错
+     *
+     * ```rust
+     * // 消息管理会转移非 Copy 类型的所有权
+     * let (tx, rx) = mpsc::channel();
+     * thread::spawn(move || {
+     *     let s = String::from("Hello World");
+     *     tx.send(s);
+     *     // println!("{s}"); 不能再使用s，s的所有权被转移
+     * });
+     * println!("{}", rx.recv().unwrap());
+     * ```
+     *
+     * 假如没有所有权的保护，String 字符串将被两个线程同时持有，任何一个线程对字符串内容的修改都会导致另外一个线程持有的字符串被改变，除非故意这么设计，否则这就是不安全的隐患。
+     *
+     * #### 循环接收消息
+     * 消息通道中的消息数量是不确定的，为了方便接收所有消息以及在通道关闭时自动停止接收者接收消息，rust 为接收者 Receiver 实现了可迭代特征协议(IntoIterator)。
      * 
+     * ```rust
+     * impl<T> Iterator for IntoIter<T> {
+     *     type Item = T;
+     *     fn next(&mut self) -> Option<T> {
+     *         self.rx.recv().ok()
+     *     }
+     * }
+     *
+     * impl<T> IntoIterator for Receiver<T> {
+     *     type Item = T;
+     *     type IntoIter = IntoIter<T>;
+     *
+     *     fn into_iter(self) -> IntoIter<T> {
+     *         IntoIter { rx: self }
+     *     }
+     * }
+     * ```
      * 
+     * `rx.recv()` 阻塞当前线程直到发送者或通道关闭，结合迭代器说明可以对 `rx` 进行循环操作，即可取出通道内的所有消息。
+     * ```rust
+     * // Receiver 接收者实现了可迭代特征，可以使用 for 遍历 Receiver 接收者
+     * let (tx, rx) = mpsc::channel();
+     * thread::spawn(move || {
+     *     let msgs = vec![
+     *         String::from("Test"),
+     *         String::from("Hello"),
+     *         String::from("World"),
+     *         String::from("!"),
+     *     ];
+     *     for msg in msgs {
+     *         tx.send(msg);
+     *     }
+     * });
+     * // 消费了一条消息，消息通道内减少一条
+     * match rx.recv() {
+     *     Ok(msg) => println!("{msg}"),
+     *     Err(e) => eprintln!("{e}"),
+     * }
      *
-     *
-     *
-     *
-     *
+     * // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息
+     * for msg in rx {
+     *     print!("{msg}");
+     * }
+     * ```
+     * 
      */
 
     //  创建消息通道，返回发送者、接收者元组（transmitter，receiver）
@@ -132,5 +187,38 @@ fn main() {
     match rx.try_recv() {
         Ok(n) => println!("{n}"),
         Err(e) => eprintln!("{}", e), // 在子线程结束后，通道被关闭，try_recv 返回 closed channel 错误
+    }
+
+    // 消息管理会转移非 Copy 类型的所有权
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let s = String::from("Hello World");
+        tx.send(s);
+        // println!("{s}"); 不能再使用s，s的所有权被转移
+    });
+    println!("{}", rx.recv().unwrap());
+
+    // Receiver 接收者实现了可迭代特征，可以使用 for 遍历 Receiver 接收者
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let msgs = vec![
+            String::from("Test"),
+            String::from("Hello"),
+            String::from("World"),
+            String::from("!"),
+        ];
+        for msg in msgs {
+            tx.send(msg);
+        }
+    });
+    // 消费了一条消息，消息通道内减少一条
+    match rx.recv() {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => eprintln!("{e}"),
+    }
+
+    // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息
+    for msg in rx {
+        print!("{msg}");
     }
 }
