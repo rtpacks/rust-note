@@ -1,6 +1,7 @@
 use std::{
-    sync::mpsc::{self, Sender},
+    sync::mpsc::{self, Sender, SyncSender},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 fn main() {
@@ -39,6 +40,8 @@ fn main() {
      * > 2. 多发送者形式更加灵活和通用，能满足单个发送者功能。
      * > 3. 从设计的角度来看，多发送者形式更加符合消息管道的本质。消息管道的目的是将消息从发送者传递到接收者，而不管发送者和接收者的数量。
      *
+     * 当发送者或接收者任一被丢弃时可以认为通道被关闭（closed）了。
+     *
      * ### 多发送者，单接收者
      * 标准库提供了通道 `std::sync::mpsc`，其中 `mpsc` 是 `multiple producer, single consumer` 的缩写，代表了该通道支持多个发送者，但是只支持唯一的接收者。
      * 当然，支持多个发送者也意味着支持单个发送者。
@@ -69,7 +72,7 @@ fn main() {
      * send 方法返回一个 `Result<T,E>`，说明它有可能返回一个错误，例如接收者被 drop 导致**发送的值不会被任何人接收**，此时继续发送毫无意义，因此返回一个错误最为合适。
      * 同样的，对于 recv 方法来说，当发送者关闭时，它也会接收到一个错误，用于说明**不会再有任何值被发送过来**。
      *
-     * #### 不阻塞的 try_recv
+     * ### 不阻塞的 try_recv
      *
      * recv方法在通道中没有消息时会阻塞当前线程，如果不希望阻塞线程，可以使用 try_recv，try_recv 会尝试接收一次消息，如果通道中没有消息，会立刻返回一个错误。
      * ```rust
@@ -94,7 +97,7 @@ fn main() {
      * 由于子线程的创建需要时间，第一个 `match rx.try_recv` 执行时子线程的消息还未发出。因为消息没有发出，try_recv 在立即尝试读取一次消息后就会报错，返回 empty channel 错误。
      * 当子线程创建成功且发送消息后，主线程会接收到 Ok(1) 的消息内容，紧接着子线程结束，发送者也随着被 drop，此时接收者又会报错，但是这次错误原因有所不同：closed channel 代表发送者已经被关闭。
      *
-     * #### 传输数据的所有权
+     * ### 传输数据的所有权
      * 使用通道来传输数据，一样要遵循 Rust 的所有权规则：
      * - 若值的类型实现了 Copy 特征，则直接复制一份该值，然后传输
      * - 若值没有实现 Copy 特征，则它的所有权会被**转移给接收端**，在发送端继续使用该值将报错
@@ -112,7 +115,7 @@ fn main() {
      *
      * 假如没有所有权的保护，String 字符串将被两个线程同时持有，任何一个线程对字符串内容的修改都会导致另外一个线程持有的字符串被改变，除非故意这么设计，否则这就是不安全的隐患。
      *
-     * #### 循环接收消息
+     * ### 循环接收消息
      * 消息通道中的消息数量是不确定的，为了方便接收所有消息以及在通道关闭时自动停止接收者接收消息，rust 为接收者 Receiver 实现了可迭代特征协议(IntoIterator)。
      *
      * ```rust
@@ -160,9 +163,9 @@ fn main() {
      * }
      * ```
      *
-     * #### 多发送者
+     * ### mpsc 的多发送者
      * 发送者 Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据。
-     * 
+     *
      * 使用多发送者时，和在多线程中使用 Arc 一样，复制一份引用即可：
      * ```rust
      * // 使用多发送者，Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
@@ -183,7 +186,61 @@ fn main() {
      *     println!("{}", msg);
      * }
      * ```
+     * 有几点需要注意:
+     * - 需要所有的发送者都被 drop 掉后，接收者 rx 才会收到错误，进而跳出 for 循环，最终结束主线程，因此要提前销毁 tx
+     * - 由于子线程谁先创建完成是未知的，因此哪条消息先发送也是未知的，最终主线程消息的**输出顺序也不确定**
      *
+     * ### 同步和异步通道
+     * Rust 标准库的 mpsc 通道其实分为两种类型：同步和异步。
+     *
+     * #### 异步通道
+     * 异步：发送操作不会阻塞当前线程，无论消息是否被接收，继续执行当前线程。即无论接收者是否正在接收消息，消息发送者在发送消息时都不会阻塞。
+     * ```rust
+     * // mpsc::channel 是一个异步管道，发送操作不会阻塞当前线程
+     * let (tx, rx) = mpsc::channel();
+     * let count = 2;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * for i in 0..count {
+     *     // Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+     *     let _tx = Sender::clone(&tx);
+     *     handles.push(thread::spawn(move || {
+     *         println!("发送之前");
+     *         _tx.send(i).unwrap(); // 发送操作不会阻塞当前线程
+     *         println!("发送之后");
+     *     }));
+     * }
+     * // 主线程阻塞，还未开始接收消息，但是子线程中发送操作正常运行
+     * thread::sleep(Duration::from_secs(2));
+     * // 只有所有发送者释放后，消息通道才会因为没有发送者而关闭，进而释放 rx，这里需要在阻塞线程前主动释放 tx
+     * drop(tx);
+     * // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息，
+     * for msg in rx {
+     *     println!("{}", msg);
+     * }
+     * ```
+     * 主线程因为睡眠阻塞了 2 秒，并没有进行消息接收，而子线程却在此期间轻松完成了消息的发送。发送之前和发送之后是连续输出的，没有受到接收端主线程的任何影响，
+     * 等睡眠结束后，主线程才姗姗来迟的从通道中接收了子线程老早之前发送的消息。因此通过 `mpsc::channel` 创建的通道是**异步通道**。
+     *
+     * #### 同步通道
+     * 与异步通道相反，同步通道的发送者**发送操作是可以阻塞当前线程的**，只有等发送者发出的消息被接收后，发送者所在的线程才会解除阻塞并继续执行。
+     * 
+     * ```rust
+     * // mpsc::sync_channel 是一个同步通道，发送操作可以阻塞当前线程，只有等发出的消息被接收后，发送者所在的线程才会解除阻塞并继续执行
+     * let (tx, rx) = mpsc::sync_channel(0);
+     * let count = 3;
+     * for i in 0..count {
+     *     let _tx = SyncSender::clone(&tx);
+     *     thread::spawn(move || {
+     *         println!("同步通道，发送之前，idx = {i}");
+     *         _tx.send(i).unwrap(); // 只有等消息被接收后才会解除阻塞，让当前线程继续执行
+     *         println!("同步通道，发送之后，idx = {i}");
+     *     });
+     * }
+     * drop(tx);
+     * for msg in rx {
+     *     println!("同步通道，接收消息，idx = {}", msg); // 与“发送之后”的输出顺序是不确定的
+     * }
+     * ```
      *
      */
 
@@ -265,5 +322,43 @@ fn main() {
     // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息，
     for msg in rx {
         println!("{}", msg);
+    }
+
+    // mpsc::channel 是一个异步管道，发送操作不会阻塞当前线程
+    let (tx, rx) = mpsc::channel();
+    let count = 2;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    for i in 0..count {
+        // Sender 和 Arc 一样实现了 Send 特征，可以在多线程中共享数据
+        let _tx = Sender::clone(&tx);
+        handles.push(thread::spawn(move || {
+            println!("发送之前");
+            _tx.send(i).unwrap(); // 发送操作不会阻塞当前线程
+            println!("发送之后");
+        }));
+    }
+    // 主线程阻塞，还未开始接收消息，但是子线程中发送操作正常运行
+    thread::sleep(Duration::from_secs(2));
+    // 只有所有发送者释放后，消息通道才会因为没有发送者而关闭，进而释放 rx，这里需要在阻塞线程前主动释放 tx
+    drop(tx);
+    // 使用 for 遍历 Receiver 接收者，即可取出通道内的消息，
+    for msg in rx {
+        println!("{}", msg);
+    }
+
+    // mpsc::sync_channel 是一个同步通道，发送操作可以阻塞当前线程，只有等发出的消息被接收后，发送者所在的线程才会解除阻塞并继续执行
+    let (tx, rx) = mpsc::sync_channel(0);
+    let count = 3;
+    for i in 0..count {
+        let _tx = SyncSender::clone(&tx);
+        thread::spawn(move || {
+            println!("同步通道，发送之前，idx = {i}");
+            _tx.send(i).unwrap(); // 只有等消息被接收后才会解除阻塞，让当前线程继续执行
+            println!("同步通道，发送之后，idx = {i}");
+        });
+    }
+    drop(tx);
+    for msg in rx {
+        println!("同步通道，接收消息，idx = {}", msg); // 与“发送之后”的输出顺序是不确定的
     }
 }
