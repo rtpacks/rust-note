@@ -93,20 +93,80 @@ fn main() {
      * #### 小心使用 Mutex
      * - 在使用数据前必须先获取锁
      * - 在数据使用完成后，必须及时的释放锁，例如增加作用域
-     * 
+     *
      * 例如：当一个操作试图锁住两个资源，然后两个线程各自获取其中一个锁，并试图获取另一个锁时，就会造成死锁（deadlock）。
      *
      * #### 内部可变性
      * 内部可变性是指当前**变量/值的空间存储的内容发生改变**的行为。
-     * 
+     *
      * Cell 与 RefCell 的可变借用行为并不完全一致，这是由于存储的数据类型不一样决定的：
      * Cell 和 RefCell 都是智能指针，用一个栈上的新空间存储被管理的值，不同的是 Cell 存储 Copy 类型的值，而 RefCell 存储的是非 Copy 类型的栈上指针信息（通过栈上指针信息管理堆上实际数据）。
      *
      * `Rc<T>/RefCell<T>` 用于单线程内部可变性， `Arc<T>/Mutex<T>` 用于多线程内部可变性。
-     * 
-     * 
-     * 
-     * 
+     *
+     * ### 死锁 deadlock
+     * 死锁形成的根本原因是**带有阻塞性访问带有锁，并且已经处于锁定中的变量**，具体来看，死锁分为单线程死锁和多线程死锁。
+     *
+     * #### 单线程死锁
+     * 单线程死锁非常容易形成，只要访问当前线程中处于锁定中的变量就会形成单线程死锁。
+     * ```rust
+     * // 单线程死锁
+     * let mutex = Mutex::new(3);
+     * // 上锁
+     * let num = mutex.lock().unwrap();
+     * // 由于在上一行给mutex上锁了，因此这里会一直阻塞，等待获取值的所有权，但是因为 num 没有释放，所以线程一直在阻塞，这就是死锁
+     * let _num = mutex.lock().unwrap();
+     * println!("{}", num);
+     * ```
+     *
+     * #### 多线程死锁
+     * 多线程死锁发生在两个线程上，有两个带锁的变量，两个线程各自使用锁定其中的一个变量后，再尝试访问另外一个锁时，就可能形成死锁。
+     * 此时就形成了一线程访问锁定状态的 A 被阻塞，二线程访问锁定状态的 B 被阻塞。
+     *
+     * ```rust
+     * // 多线程死锁
+     * let count = 100;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * let mutex1 = Arc::new(Mutex::new(1));
+     * let mutex2 = Arc::new(Mutex::new(2));
+     * for i in 0..count {
+     *     let _mutex1 = Arc::clone(&mutex1);
+     *     let _mutex2 = Arc::clone(&mutex2);
+     *     handles.push(thread::spawn(move || {
+     *         if i % 2 == 0 {
+     *             // 锁住 mutex1 后去锁 mutex2
+     *             let num1 = _mutex1.lock().unwrap();
+     *             println!("线程 {} 锁住 mutex1，尝试锁住 mutex2", i);
+     *             let num2 = _mutex2.lock().unwrap();
+     *         } else {
+     *             // 锁住 mutex2 后去锁 mutex1
+     *             let num2 = _mutex2.lock().unwrap();
+     *             println!("线程 {} 锁住 mutex2，尝试锁住 mutex1", i);
+     *             let num1 = _mutex1.lock().unwrap();
+     *         }
+     *     }));
+     * }
+     * for h in handles {
+     *     h.join().unwrap();
+     * }
+     * println!("没有发生死锁");
+     *
+     * ```
+     *
+     * 为何某些时候，死锁不会发生？
+     * 原因很简单，线程 2 在线程 1 锁 MUTEX1 之前，就已经全部执行完了，随之线程 2 的 MUTEX2 和 MUTEX1 被全部释放，线程 1 对锁的获取将不再有竞争者，也就意味着不会被一直阻塞。
+     * 同理，线程 1 若全部被执行完，那线程 2 也不会被锁一直阻塞，可以在线程 1 中间加一个睡眠，增加死锁发生的概率。如果在线程 2 中同样的位置也增加一个睡眠，那死锁将必然发生!
+     *
+     *
+     * ### try_lock
+     * 死锁的形成是因为**带有阻塞性访问带有锁，并且已经处于锁定中的变量**的阻塞，如果访问时不阻塞就意味着不会形成死锁，try_lock 就是不带阻塞的方法。
+     *
+     * 与 lock 方法不同，try_lock 会尝试去获取一次锁，如果无法获取会返回一个错误。
+     *
+     * > 一个有趣的命名规则：在 Rust 标准库中，使用 try_xxx 都会尝试进行一次操作，如果无法完成，就立即返回，不会发生阻塞。
+     * > 例如消息传递章节中的 try_recv 以及本章节中的 try_lock
+     *
+     *
      *
      *
      *
@@ -136,7 +196,69 @@ fn main() {
     let num = mutex.lock().unwrap(); // 上锁
     {
         // 由于在上一行给mutex上锁了，因此这里会一直阻塞，等待获取值的所有权，但是因为 num 没有释放，所以线程一直在阻塞，这就是死锁
-        let _num = mutex.lock().unwrap();
+        // let _num = mutex.lock().unwrap();
     }
     println!("{}", num);
+
+    // 单线程死锁
+    let mutex = Mutex::new(3);
+    // 上锁
+    let num = mutex.lock().unwrap();
+    // 由于在上一行给mutex上锁了，因此这里会一直阻塞，等待获取值的所有权，但是因为 num 没有释放，所以线程一直在阻塞，这就是死锁
+    // let _num = mutex.lock().unwrap();
+    println!("{}", num);
+
+    // 多线程死锁
+    // let count = 100;
+    // let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    // let mutex1 = Arc::new(Mutex::new(1));
+    // let mutex2 = Arc::new(Mutex::new(2));
+    // for i in 0..count {
+    //     let _mutex1 = Arc::clone(&mutex1);
+    //     let _mutex2 = Arc::clone(&mutex2);
+    //     handles.push(thread::spawn(move || {
+    //         if i % 2 == 0 {
+    //             // 锁住 mutex1 后去锁 mutex2
+    //             let num1 = _mutex1.lock().unwrap();
+    //             println!("线程 {} 锁住 mutex1，尝试锁住 mutex2", i);
+    //             let num2 = _mutex2.lock().unwrap();
+    //         } else {
+    //             // 锁住 mutex2 后去锁 mutex1
+    //             let num2 = _mutex2.lock().unwrap();
+    //             println!("线程 {} 锁住 mutex2，尝试锁住 mutex1", i);
+    //             let num1 = _mutex1.lock().unwrap();
+    //         }
+    //     }));
+    // }
+    // for h in handles {
+    //     h.join().unwrap();
+    // }
+    // println!("没有发生死锁");
+
+    // try_lock 不阻塞的方法
+    let count = 100;
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    let mutex1 = Arc::new(Mutex::new(1));
+    let mutex2 = Arc::new(Mutex::new(2));
+    for i in 0..count {
+        let _mutex1 = Arc::clone(&mutex1);
+        let _mutex2 = Arc::clone(&mutex2);
+        handles.push(thread::spawn(move || {
+            if i % 2 == 0 {
+                // 锁住 mutex1 后去锁 mutex2
+                let num1 = _mutex1.try_lock().unwrap();
+                println!("线程 {} 锁住 mutex1，尝试锁住 mutex2", i);
+                let num2 = _mutex2.try_lock().unwrap();
+            } else {
+                // 锁住 mutex2 后去锁 mutex1
+                let num2 = _mutex2.try_lock().unwrap();
+                println!("线程 {} 锁住 mutex2，尝试锁住 mutex1", i);
+                let num1 = _mutex1.try_lock().unwrap();
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("没有发生死锁");
 }
