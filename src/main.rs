@@ -1,7 +1,7 @@
 use std::{
     sync::{
         mpsc::{self, Sender, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -158,7 +158,7 @@ fn main() {
      * 同理，线程 1 若全部被执行完，那线程 2 也不会被锁一直阻塞，可以在线程 1 中间加一个睡眠，增加死锁发生的概率。如果在线程 2 中同样的位置也增加一个睡眠，那死锁将必然发生!
      *
      *
-     * ### try_lock
+     * #### try_lock
      * 死锁的形成是因为**带有阻塞性访问带有锁，并且已经处于锁定中的变量**的阻塞，如果访问时不阻塞就意味着不会形成死锁，try_lock 就是不带阻塞的方法。
      *
      * 与 lock 方法不同，try_lock 会尝试去获取一次锁，如果无法获取会返回一个错误。
@@ -167,8 +167,65 @@ fn main() {
      * > 例如消息传递章节中的 try_recv 以及本章节中的 try_lock
      *
      *
+     * ### 读写锁 RwLock
+     * Mutex 会对每次读写都进行加锁（即使不修改数据），但某些时候需要大量的并发读，Mutex 就无法满足需求了，此时就可以使用 RwLock。
+     * RwLock 在使用上和 Mutex 区别不大，只有在多个读的情况下不阻塞程序，其他如读写、写读、写写情况下均会对后获取锁的操作进行阻塞。
+     * - 同一时间允许多个读，不允许出现写
+     * - 同一时间只允许一个写，不允许第二个读或写
+     * 即不允许出现数据在读的过程中被改变。
      *
+     * ```rust
+     * let count = 100;
+     * let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+     * let rwlock1 = Arc::new(RwLock::new(1));
+     * let rwlock2 = Arc::new(RwLock::new(2));
+     * for i in 0..count {
+     *     let _rwlock1 = Arc::clone(&rwlock1);
+     *     let _rwlock2 = Arc::clone(&rwlock2);
+     *     handles.push(thread::spawn(move || {
+     *         if i % 2 == 0 {
+     *             let num2 = _rwlock2.write().unwrap();
+     *             println!("线程 {} 读取 rwlock1，尝试写 rwlock2", i);
+     *             let num1 = _rwlock1.read().unwrap();
+     *         } else {
+     *             let num1 = _rwlock1.write().unwrap();
+     *             println!("线程 {} 读取 rwlock2，尝试写 rwlock1", i);
+     *             let num2 = _rwlock2.read().unwrap();
+     *         }
+     *     }));
+     * }
+     * for h in handles {
+     *     h.join().unwrap();
+     * }
+     * println!("没有发生死锁");
+     * ```
      *
+     * 也可以使用 try_write 和 try_read 来尝试进行一次写/读，若失败则返回错误。
+     *
+     * 简单总结下 RwLock:
+     * - 读和写不能同时存在
+     * - 同一时刻允许多个读，但最多只能有一个写，且读写不能同时存在
+     * - 读可以使用 read、try_read，写 write、try_write, 在实际项目中，try_xxx 会更安全
+     *
+     * ### Mutex 和 RwLock
+     * 使用上，Mutex 比 RwLock 更简单，因为 RwLock 需要着重关注几个问题：
+     * - 读和写不能同时发生，如果使用 try_xxx 解决，需要做大量的错误处理和失败重试机制
+     * - 当读多写少时，写操作可能会因为一直无法获得锁导致连续多次失败 (writer starvation)
+     * - RwLock 其实是操作系统提供的，实现原理要比 Mutex 复杂的多，因此单就锁的性能而言，比不上原生实现的 Mutex
+     *
+     * **Mutex 和 RwLock 的使用场景**
+     * - 追求高并发读取时，可以使用 RwLock，因为 Mutex 一次只允许一个线程读取
+     * - 如果要保证写操作的成功性，使用 Mutex
+     * - 不知道哪个合适，统一使用 Mutex
+     *
+     * 当然，确定使用哪个锁的最好方式是做一个 benchmark。
+     *
+     * 使用 RwLock 要确保满足以下两个条件：**并发读和需要对读到的资源进行"长时间"的操作**。
+     * 
+     * 所以一个常见的、错误的使用 RwLock 的场景就是使用 HashMap 进行简单读写。
+     * 这是因为 HashMap 的读和写都非常快，HashMap 也许满足了并发读的需求，但是往往并不能满足 "长时间" 的操作这个需求，RwLock 的复杂实现和相对低的性能反而会导致整体性能的降低。
+     * 
+     * 
      *
      *
      */
@@ -236,24 +293,49 @@ fn main() {
     // println!("没有发生死锁");
 
     // try_lock 不阻塞的方法
-    let count = 100;
+    // let count = 100;
+    // let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    // let mutex1 = Arc::new(Mutex::new(1));
+    // let mutex2 = Arc::new(Mutex::new(2));
+    // for i in 0..count {
+    //     let _mutex1 = Arc::clone(&mutex1);
+    //     let _mutex2 = Arc::clone(&mutex2);
+    //     handles.push(thread::spawn(move || {
+    //         if i % 2 == 0 {
+    //             // 锁住 mutex1 后去锁 mutex2
+    //             let num1 = _mutex1.try_lock().unwrap();
+    //             println!("线程 {} 锁住 mutex1，尝试锁住 mutex2", i);
+    //             let num2 = _mutex2.try_lock().unwrap();
+    //         } else {
+    //             // 锁住 mutex2 后去锁 mutex1
+    //             let num2 = _mutex2.try_lock().unwrap();
+    //             println!("线程 {} 锁住 mutex2，尝试锁住 mutex1", i);
+    //             let num1 = _mutex1.try_lock().unwrap();
+    //         }
+    //     }));
+    // }
+    // for h in handles {
+    //     h.join().unwrap();
+    // }
+    // println!("没有发生死锁");
+
+    // RwLock 读写锁支持并发读
+    let count = 10000;
     let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
-    let mutex1 = Arc::new(Mutex::new(1));
-    let mutex2 = Arc::new(Mutex::new(2));
+    let rwlock1 = Arc::new(RwLock::new(1));
+    let rwlock2 = Arc::new(RwLock::new(2));
     for i in 0..count {
-        let _mutex1 = Arc::clone(&mutex1);
-        let _mutex2 = Arc::clone(&mutex2);
+        let _rwlock1 = Arc::clone(&rwlock1);
+        let _rwlock2 = Arc::clone(&rwlock2);
         handles.push(thread::spawn(move || {
             if i % 2 == 0 {
-                // 锁住 mutex1 后去锁 mutex2
-                let num1 = _mutex1.try_lock().unwrap();
-                println!("线程 {} 锁住 mutex1，尝试锁住 mutex2", i);
-                let num2 = _mutex2.try_lock().unwrap();
+                let num2 = _rwlock2.write().unwrap();
+                println!("线程 {} 读取 rwlock1，尝试写 rwlock2", i);
+                let num1 = _rwlock1.read().unwrap();
             } else {
-                // 锁住 mutex2 后去锁 mutex1
-                let num2 = _mutex2.try_lock().unwrap();
-                println!("线程 {} 锁住 mutex2，尝试锁住 mutex1", i);
-                let num1 = _mutex1.try_lock().unwrap();
+                let num1 = _rwlock1.write().unwrap();
+                println!("线程 {} 读取 rwlock2，尝试写 rwlock1", i);
+                let num2 = _rwlock2.read().unwrap();
             }
         }));
     }
