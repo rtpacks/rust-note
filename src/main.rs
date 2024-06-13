@@ -1,7 +1,7 @@
 use std::{
     sync::{
         mpsc::{self, Sender, SyncSender},
-        Arc, Mutex, RwLock,
+        Arc, Condvar, Mutex, RwLock,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -221,16 +221,57 @@ fn main() {
      * 当然，确定使用哪个锁的最好方式是做一个 benchmark。
      *
      * 使用 RwLock 要确保满足以下两个条件：**并发读和需要对读到的资源进行"长时间"的操作**。
-     * 
+     *
      * 所以一个常见的错误使用 RwLock 的场景就是使用 HashMap 进行简单读写。
      * 这是因为 HashMap 的读和写都非常快，HashMap 也许满足了并发读的需求，但是往往并不能满足 "长时间" 的操作这个需求，RwLock 的复杂实现和相对低的性能反而会导致整体性能的降低。
-     * 
+     *
      * ### 第三方库
      * 标准库在设计时总会存在取舍，因为往往性能并不是最好的，如果你追求性能，可以使用三方库提供的并发原语:
      * - parking_lot, 功能更完善、稳定，社区较为活跃，star 较多，更新较为活跃
      * - spin, 在多数场景中性能比parking_lot高一点，最近没怎么更新
      *
+     * ### 条件变量控制线程同步
+     * Mutex 与 Arc 的搭配可以解决多线程下资源安全访问的问题，在这个基础上 rust 还提供了一个条件变量（Condition Variable）用于控制资源的访问顺序。
      *
+     * 条件变量（Condition Variable）搭配 Mutex 和 Arc，可以做到控制线程执行流程，让线程挂起直至某个条件满足后再继续运行。
+     *
+     * 比如，让两个线程内部的循环交替输出相同的序号，这里先用一个条件变量和线程休眠实现一个简单版本：
+     * ```rust
+     * // 用一个条件变量和线程休眠实现一个简单版本的交替输出
+     * let cond = Arc::new(Condvar::new());
+     * let mutex = Arc::new(Mutex::new(true));
+     * let _cond = Arc::clone(&cond);
+     * let _mutex = Arc::clone(&mutex);
+     * let count = 3;
+     *
+     * let handle = thread::spawn(move || {
+     *     let mut lock = _mutex.lock().unwrap();
+     *
+     *     for i in 0..count {
+     *         while *lock == false {
+     *             lock = _cond.wait(lock).unwrap(); // 阻塞线程，等待条件变量的通知后继续运行，并将最新的值赋值给锁
+     *         }
+     *
+     *         *lock = false; // 重置条件，重新进入阻塞等待条件变量的调度
+     *         println!("inner index = {}", i);
+     *     }
+     * });
+     *
+     * for i in 0..count {
+     *     // 用线程休眠模拟另外一个条件，阻塞当前运行，然后恢复继续运行
+     *     // 这里先休眠是为了让子线程进入条件阻塞状态
+     *     println!("outer index = {}", i);
+     *     thread::sleep(Duration::from_millis(100));
+     *     // println!("outer index = {}", i); 调整输出位置，可以观察到交替顺序变换
+     *     let mut lock = mutex.lock().unwrap();
+     *     *lock = true;
+     *     cond.notify_one(); // 通知另外一个线程可以继续运行
+     * }
+     *
+     * handle.join().unwrap();
+     * ```
+     *
+     * 
      */
     let count = 5;
     let mutex = Arc::new(Mutex::new(String::from("Hello")));
@@ -323,27 +364,60 @@ fn main() {
     // println!("没有发生死锁");
 
     // RwLock 读写锁支持并发读
-    let count = 10000;
-    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
-    let rwlock1 = Arc::new(RwLock::new(1));
-    let rwlock2 = Arc::new(RwLock::new(2));
-    for i in 0..count {
-        let _rwlock1 = Arc::clone(&rwlock1);
-        let _rwlock2 = Arc::clone(&rwlock2);
-        handles.push(thread::spawn(move || {
-            if i % 2 == 0 {
-                let num2 = _rwlock2.write().unwrap();
-                println!("线程 {} 读取 rwlock1，尝试写 rwlock2", i);
-                let num1 = _rwlock1.read().unwrap();
-            } else {
-                let num1 = _rwlock1.write().unwrap();
-                println!("线程 {} 读取 rwlock2，尝试写 rwlock1", i);
-                let num2 = _rwlock2.read().unwrap();
+    // let count = 10000;
+    // let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(count);
+    // let rwlock1 = Arc::new(RwLock::new(1));
+    // let rwlock2 = Arc::new(RwLock::new(2));
+    // for i in 0..count {
+    //     let _rwlock1 = Arc::clone(&rwlock1);
+    //     let _rwlock2 = Arc::clone(&rwlock2);
+    //     handles.push(thread::spawn(move || {
+    //         if i % 2 == 0 {
+    //             let num2 = _rwlock2.write().unwrap();
+    //             println!("线程 {} 读取 rwlock1，尝试写 rwlock2", i);
+    //             let num1 = _rwlock1.read().unwrap();
+    //         } else {
+    //             let num1 = _rwlock1.write().unwrap();
+    //             println!("线程 {} 读取 rwlock2，尝试写 rwlock1", i);
+    //             let num2 = _rwlock2.read().unwrap();
+    //         }
+    //     }));
+    // }
+    // for h in handles {
+    //     h.join().unwrap();
+    // }
+    // println!("没有发生死锁");
+
+    // 用一个条件变量和线程休眠实现一个简单版本的交替输出
+    let cond = Arc::new(Condvar::new());
+    let mutex = Arc::new(Mutex::new(true));
+    let _cond = Arc::clone(&cond);
+    let _mutex = Arc::clone(&mutex);
+    let count = 3;
+
+    let handle = thread::spawn(move || {
+        let mut lock = _mutex.lock().unwrap();
+
+        for i in 0..count {
+            while *lock == false {
+                lock = _cond.wait(lock).unwrap(); // 阻塞线程，等待条件变量的通知后继续运行，并将最新的值赋值给锁
             }
-        }));
+
+            *lock = false; // 重置条件，重新进入阻塞等待条件变量的调度
+            println!("inner index = {}", i);
+        }
+    });
+
+    for i in 0..count {
+        // 用线程休眠模拟另外一个条件，阻塞当前运行，然后恢复继续运行
+        // 这里先休眠是为了让子线程进入条件阻塞状态
+        println!("outer index = {}", i);
+        thread::sleep(Duration::from_millis(100));
+        // println!("outer index = {}", i); 调整输出位置，可以观察到交替顺序变换
+        let mut lock = mutex.lock().unwrap();
+        *lock = true;
+        cond.notify_one(); // 通知另外一个线程可以继续运行
     }
-    for h in handles {
-        h.join().unwrap();
-    }
-    println!("没有发生死锁");
+
+    handle.join().unwrap();
 }
