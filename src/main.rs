@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 
-fn main() {
+use tokio::sync::Semaphore;
+
+#[tokio::main]
+async fn main() {
     /*
      *
      * ## 线程同步：锁、Condvar 和信号量
@@ -310,7 +313,49 @@ fn main() {
      * 想象一下，当一个新游戏刚开服时，往往会控制游戏内玩家的同时在线数，一旦超过某个临界值，就开始进行排队进服。
      * 而在实际使用中，有很多时候需要通过信号量来控制最大并发数，防止服务器资源被撑爆。
      *
-     * 本来 Rust 在标准库中有提供一个信号量实现, 但是由于各种原因这个库现在已经不再推荐使用了，因此我们推荐使用 tokio 中提供的 Semaphore 实现: tokio::sync::Semaphore。
+     * 本来 Rust 在标准库中有提供一个信号量实现, 但是由于各种原因这个库现在已经不再推荐使用了，推荐使用 tokio 中提供的 Semaphore 实现 tokio::sync::Semaphore。
+     *
+     * 这里先认识 `async move {}` 和 `async move || {}` 的区别：
+     * - `async move {}`：直接定义一个异步块，立即捕获环境变量并生成 Future，适用于需要单次执行的异步操作。
+     * - `async move || {}`：定义一个异步闭包，每次调用该闭包时生成一个新的 Future，并捕获当前调用环境中的变量,适用于需要多次调用的异步函数。
+     *
+     * 选择哪种形式取决于具体需求以及代码的应用场景。如果需要创建可复用的异步函数，async move || {} 更合适；如果只需要一次性执行的异步逻辑，async move {} 会更简洁。
+     *
+     * > Future 是一个核心概念，用于表示一个异步操作的结果，它可能在将来某个时刻完成。Future 可以被视为一种承诺（promise），它将在未来某个时间点提供一个值或错误。
+     * > 当编写异步代码时，如果希望某些操作能够在不阻塞当前线程的情况下执行，并且在这些操作完成后获得其结果。Future 提供了一种机制，可以描述这些异步操作，并在它们完成时得到通知。
+     * >
+     * > 这个概念和 JavaScript 的 Promise 非常相似，表示一个将来可能会产生结果的异步操作，优点：
+     * > - 非阻塞：Future 允许异步代码在不阻塞线程的情况下执行，使得应用程序可以处理更多并发任务
+     * > - 组合性：可以通过组合多个 Future 来构建复杂的异步控制流
+     * > - 可读性：使用 async/await 语法，使得异步代码看起来像同步代码，更加易读和易维护
+     *
+     * ```rust
+     * #[tokio::main]
+     * async fn main() {
+     *     let semaphore = Arc::new(Semaphore::new(3));
+     *     let mut handles = Vec::new();
+     *     let count = 5;
+     *     for i in 0..count {
+     *         // acquire_owned 申请许可，申请通过则线程运行，否则线程被阻塞，直至获得许可后才会解除阻塞继续运行
+     *         let _semaphore = Arc::clone(&semaphore);
+     *         handles.push(tokio::spawn(async move {
+     *             println!("{} 未获取 permit 许可", i);
+     *             let permit = _semaphore.acquire().await.unwrap();
+     *             println!("{} 已获取 permit 许可", i);
+     *             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+     *             println!("{} 运行结束", i);
+     *             // drop(permit); 在离开作用域时自动释放
+     *         }));
+     *     }
+     *     for h in handles {
+     *         h.await.unwrap();
+     *     }
+     * }
+     * ```
+     *
+     * 使用信号量过程中需要申请和归还，使用前需要申请信号量，如果容量满了，就需要等待；使用后需要释放信号量，以便其它等待者可以继续。
+     * 
+     * 
      *
      */
     let count = 5;
@@ -485,4 +530,24 @@ fn main() {
         println!("outer index = {}", i);
     }
     handle.join().unwrap(); // 等待子线程完成
+
+    // tokio 的信号量，可以视为连接池，通过 acquire_owned 申请许可，申请通过则线程运行，否则线程被阻塞，直至获得许可后才会解除阻塞继续运行。
+    let semaphore = Arc::new(Semaphore::new(3));
+    let mut handles = Vec::new();
+    let count = 5;
+    for i in 0..count {
+        // acquire_owned 申请许可，申请通过则线程运行，否则线程被阻塞，直至获得许可后才会解除阻塞继续运行
+        let _semaphore = Arc::clone(&semaphore);
+        handles.push(tokio::spawn(async move {
+            println!("{} 未获取 permit 许可", i);
+            let permit = _semaphore.acquire().await.unwrap();
+            println!("{} 已获取 permit 许可", i);
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            println!("{} 运行结束", i);
+            // drop(permit); 在离开作用域时自动释放
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
 }
