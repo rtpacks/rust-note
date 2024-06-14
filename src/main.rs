@@ -271,7 +271,40 @@ fn main() {
      * handle.join().unwrap();
      * ```
      *
-     * 
+     * 一个条件变量的版本：
+     * ```rust
+     * // 一个互斥锁和条件变量对，用于线程间的同步
+     * let count = 3;
+     * let pair1 = Arc::new((Mutex::new(false), Condvar::new()));
+     * let pair2 = Arc::clone(&pair1);
+     * let handle = thread::spawn(move || {
+     *     let (lock, cvar) = &*pair2;
+     *     for i in 0..count {
+     *         let mut started = lock.lock().unwrap();
+     *         while !*started {
+     *             // 等待主线程的通知
+     *             started = cvar.wait(started).unwrap();
+     *         }
+     *         println!("inner index = {}", i);
+     *         *started = false; // 重置条件
+     *         cvar.notify_one(); // 通知主线程
+     *     }
+     * });
+     * let (lock, cvar) = &*pair1;
+     * for i in 0..count {
+     *     let mut started = lock.lock().unwrap();
+     *     *started = true; // 设置条件
+     *     cvar.notify_one(); // 通知子线程，需要放在条件变量阻塞之前，否则会造成死锁
+     *     while *started {
+     *         // 等待子线程通知
+     *         started = cvar.wait(started).unwrap();
+     *     }
+     *     println!("outer index = {}", i);
+     * }
+     * handle.join().unwrap(); // 等待子线程完成
+     * ```
+     *
+     *
      */
     let count = 5;
     let mutex = Arc::new(Mutex::new(String::from("Hello")));
@@ -389,35 +422,60 @@ fn main() {
     // println!("没有发生死锁");
 
     // 用一个条件变量和线程休眠实现一个简单版本的交替输出
-    let cond = Arc::new(Condvar::new());
-    let mutex = Arc::new(Mutex::new(true));
-    let _cond = Arc::clone(&cond);
-    let _mutex = Arc::clone(&mutex);
+    // let cond = Arc::new(Condvar::new());
+    // let mutex = Arc::new(Mutex::new(true));
+    // let _cond = Arc::clone(&cond);
+    // let _mutex = Arc::clone(&mutex);
+    // let count = 3;
+    // let handle = thread::spawn(move || {
+    //     let mut lock = _mutex.lock().unwrap();
+    //     for i in 0..count {
+    //         while *lock == false {
+    //             lock = _cond.wait(lock).unwrap(); // 阻塞线程，等待条件变量的通知后继续运行，并将最新的值赋值给锁
+    //         }
+    //         *lock = false; // 重置条件，重新进入阻塞等待条件变量的调度
+    //         println!("inner index = {}", i);
+    //     }
+    // });
+    // for i in 0..count {
+    //     // 用线程休眠模拟另外一个条件，阻塞当前运行，然后恢复继续运行
+    //     // 这里先休眠是为了让子线程进入条件阻塞状态
+    //     println!("outer index = {}", i);
+    //     thread::sleep(Duration::from_millis(100));
+    //     // println!("outer index = {}", i); 调整输出位置，可以观察到交替顺序变换
+    //     let mut lock = mutex.lock().unwrap();
+    //     *lock = true;
+    //     cond.notify_one(); // 通知另外一个线程可以继续运行
+    // }
+    // handle.join().unwrap();
+
+    // 一个互斥锁和条件变量对，用于线程间的同步
     let count = 3;
-
+    let pair1 = Arc::new((Mutex::new(false), Condvar::new()));
+    let pair2 = Arc::clone(&pair1);
     let handle = thread::spawn(move || {
-        let mut lock = _mutex.lock().unwrap();
-
+        let (lock, cvar) = &*pair2;
         for i in 0..count {
-            while *lock == false {
-                lock = _cond.wait(lock).unwrap(); // 阻塞线程，等待条件变量的通知后继续运行，并将最新的值赋值给锁
+            let mut started = lock.lock().unwrap();
+            while !*started {
+                // 等待主线程的通知
+                started = cvar.wait(started).unwrap();
             }
-
-            *lock = false; // 重置条件，重新进入阻塞等待条件变量的调度
             println!("inner index = {}", i);
+            *started = false; // 重置条件
+            cvar.notify_one(); // 通知主线程
         }
     });
-
+    let (lock, cvar) = &*pair1;
     for i in 0..count {
-        // 用线程休眠模拟另外一个条件，阻塞当前运行，然后恢复继续运行
-        // 这里先休眠是为了让子线程进入条件阻塞状态
+        let mut started = lock.lock().unwrap();
+        *started = true; // 设置条件
+        cvar.notify_one(); // 通知子线程，需要放在条件变量阻塞之前，否则会造成死锁
+        while *started {
+            // 等待子线程通知
+            started = cvar.wait(started).unwrap();
+        }
         println!("outer index = {}", i);
-        thread::sleep(Duration::from_millis(100));
-        // println!("outer index = {}", i); 调整输出位置，可以观察到交替顺序变换
-        let mut lock = mutex.lock().unwrap();
-        *lock = true;
-        cond.notify_one(); // 通知另外一个线程可以继续运行
     }
-
-    handle.join().unwrap();
+    handle.join().unwrap(); // 等待子线程完成
 }
