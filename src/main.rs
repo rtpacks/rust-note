@@ -95,6 +95,12 @@ fn main() {
      * h.join().unwrap();
      * ```
      *
+     * ### 总结
+     * - 实现 Send 特征的类型可以在线程间安全的传递其所有权，即数据支持在线程中转移
+     * - 实现 Sync 特征的类型可以在线程间安全的共享(通过引用)，即数据支持在线程中共享
+     * - 绝大部分类型都实现了 Send 和 Sync 特征，常见的未实现的有：裸指针、Cell、RefCell、Rc 等
+     * - 可以为自定义类型实现 Send 和 Sync，但是需要 unsafe 代码块
+     * - 可以为部分 Rust 中的类型实现 Send、Sync，但是需要使用 newtype，例如裸指针
      */
 
     #[derive(Debug)]
