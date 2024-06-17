@@ -6,123 +6,70 @@ use std::{
 fn main() {
     /*
      *
-     * ## 基于 Send 和 Sync 的线程安全
-     * 为什么 Arc 可以在多线程中安全使用，而 Rc、RefCell 和裸指针不可以在多线程间使用呢，这归功于 Send 和 Sync 两个特征。
+     * ## 全局变量
+     * 在一些场景，我们可能需要全局变量来简化状态共享的代码，包括全局 ID，全局数据存储等等。
      *
-     * ### Send 和 Sync
-     * Send 和 Sync 是 Rust 安全并发的重中之重，但是实际上它们只是标记特征(marker trait，该特征未定义任何行为，只用于标记)：
-     * - 实现 Send 特征的类型可以在线程间安全的传递其所有权，即**数据能够在不同线程之间转移**
-     * - 实现 Sync 特征的类型可以在线程间安全的共享(通过引用)，即**数据能够在不同线程之间共享**
+     * 全局变量是一种特殊的变量，在 rust 中相对复杂，但有一点可以肯定，全局变量的生命周期肯定是'static，但是不代表它需要用static来声明。
      *
-     * 这里有一个潜在的依赖：一个类型要在线程间安全的共享的前提是，指向它的引用必须能在线程间传递。
-     * 因为如果引用都不能被传递，我们就无法在多个线程间使用引用去访问同一个数据了。
-     * 这意味着：如果 T 为 Sync 则 &T 为 Send，并且这个关系反过来在大部分情况下都是正确的，即如果 &T 为 Send 则 T 为 Sync。
+     * 具体来说，全局变量分为编译期初始化和运行期初始化两种。
      *
-     * 观察 Rc 和 Arc 的源码片段：
+     * **常量与普通变量的区别**
+     * - 关键字是const而不是let
+     * - 定义常量必须指明类型（如 i32），不能省略
+     * - 定义常量时变量的命名规则一般是全部大写
+     * - 对于变量出现重复的定义(绑定)会发生变量遮盖，后面定义的变量会遮住前面定义的变量，常量则不允许出现重复的定义
+     * - 常量可以在任意作用域进行定义，其生命周期贯穿整个程序的生命周期。编译时编译器会尽可能将其内联到代码中，所以在不同地方对同一常量的引用并不能保证引用到相同的内存地址
+     * - 常量的赋值只能是常量表达式/数学表达式，也就是说必须是在编译期就能计算出的值，如果需要在运行时才能得出结果的值比如函数，则不能赋值给常量表达式。即常量的赋值不能在程序运行时通过配置实现。
+     *
+     * ### 编译期初始化
+     * 大多数使用的全局变量都只需要在编译期初始化，例如静态配置、计数器、状态值等等。
+     *
+     * **编译期初始化静态常量**
+     * 全局常量可以在程序任何一部分使用，如果它是定义在某个模块中，则需要引入对应的模块才能使用。全局常量很适合用作静态配置：
      * ```rust
-     * // Rc源码片段
-     * impl<T: ?Sized> !marker::Send for Rc<T> {}
-     * impl<T: ?Sized> !marker::Sync for Rc<T> {}
-     *
-     * // Arc源码片段
-     * unsafe impl<T: ?Sized + Sync + Send> Send for Arc<T> {}
-     * unsafe impl<T: ?Sized + Sync + Send> Sync for Arc<T> {}
-     * ```
-     * `!` 代表移除特征的相应实现，上面代码中 `Rc<T>` 的 Send 和 Sync 特征被特地移除了实现，而 `Arc<T>` 则相反，实现了 Sync + Send。
-     *
-     * 再看一下 Mutex，Mutex 是没有 Sync 特征限制的，这意味着 Mutex 不能直接用于线程共享：
-     * ```rust
-     * unsafe impl<T: ?Sized + Send> Sync for Mutex<T> {}
+     * const MAX_ID: usize =  usize::MAX / 2;
+     * println!("最大的用户 ID = {}", MAX_ID);
      * ```
      *
-     * ### 实现 Send 和 Sync 的类型
-     * 在 Rust 中，几乎所有类型都默认实现了 Send 和 Sync，而且由于这两个特征都是可自动派生的特征(通过 derive 派生)。
+     * 常量可以在任意作用域中定义，编译时编译器会尽可能将其内联到代码中，所以在不同地方对同一常量的引用并不能保证引用到相同的内存地址。
      *
-     * 一个复合类型(例如结构体), 只要它内部的所有成员都实现了 Send 或者 Sync，那么它就自动实现了 Send 或 Sync。
-     *
-     * 正是因为以上规则，Rust 中绝大多数类型都实现了 Send 和 Sync，常见的未实现有以下几个:
-     * - 裸指针两者都没实现，它本身没有任何安全保证
-     * - UnsafeCell 没有实现 Sync，因此 Cell 和 RefCell 也不是
-     * - Rc 两者都没实现(因为内部的引用计数器不是线程安全的)
-     *
-     * 当然，如果是自定义的复合类型，那没实现这两个特征就比较常见：只要复合类型中有一个成员不是 Send 或 Sync，那么该复合类型也就不是 Send 或 Sync。
-     *
-     * 手动实现 Send 和 Sync 是不安全的，通常并不需要手动实现 Send 和 Sync trait，实现者需要使用 unsafe 小心维护并发安全保证。
-     *
-     * ### 为裸指针实现 Send 和 Sync
-     * 无法直接为裸指针实现 Send 和 Sync 特征，因此需要借助 newtype 为裸指针实现这两个特征。
-     * 但有一点需要注意：Send 和 Sync 是 unsafe 特征，实现时需要用 unsafe 代码块包裹。
-     *
+     * **编译期初始化静态变量**
+     * 静态变量允许声明一个全局的变量，常用于全局数据统计，例如统计总请求数：
      * ```rust
-     * #[derive(Debug)]
-     * struct MyBox(*mut u8);
-     * // 为裸指针实现 Send 特征，支持数据在不同线程中转移
-     * unsafe impl Send for MyBox {}
-     *
-     * // Send 特征支持数据在不同线程中转移
-     * let mut b = MyBox(5 as *mut u8);
-     * let h = thread::spawn(move || {
-     *     println!("{:?}", b);
-     * });
-     * h.join().unwrap();
+     * // 静态变量
+     * static mut REQUEST_COUNT: usize = 0;
+     * unsafe {
+     *     // 操作 static 类型的变量需要 unsafe 模块
+     *     // 因为这种使用方式往往并不安全，当在多线程中同时去修改时，会不可避免的遇到脏数据
+     *     REQUEST_COUNT = 2;
+     * }
+     * unsafe {
+     *     println!("REQUEST_COUNT = {}", REQUEST_COUNT);
+     * }
      * ```
+     * 操作 static 类型的变量需要 unsafe 作用域，因为这种使用方式往往并不安全，当在多线程中同时去修改时，会不可避免的遇到脏数据。
      *
+     * 和常量相同，定义静态变量的时候必须赋值为在编译期就可以计算出的值(常量表达式/数学表达式)，不能是运行时才能计算出的值(如函数)，即不能通过程序运行时再配置定义静态变量。
      *
-     * Sync 特征支持数据在不同的线程中共享，但在多线程中共享数据涉及到 rust 的单一所有权问题，此时需要搭配 Arc 才能在多线程中共享：
-     *
-     * ```rust
-     * #[derive(Debug)]
-     * struct MyBox(*mut u8);
-     * // 为裸指针实现 Send 特征，支持数据在不同线程中转移
-     * unsafe impl Send for MyBox {}
-     * // 为裸指针实现 Sync 特征，支持数据在不同线程中共享
-     * unsafe impl Sync for MyBox {}
-     *
-     * // Send 特征支持数据在不同线程中转移
-     * let mut b = MyBox(5 as *mut u8);
-     * let h = thread::spawn(move || {
-     *     println!("{:?}", b);
-     * });
-     * h.join().unwrap();
-     *
-     * // Sync 特征支持数据在不同的线程中共享，此时涉及到 rust 的所有权问题，需要搭配 Arc 才能在多线程中共享
-     * let mut b = MyBox(5 as *mut u8);
-     * let arc_b = Arc::new(b);
-     * let _arc_b = Arc::clone(&arc_b);
-     * let h = thread::spawn(move || {
-     *     println!("{:?}", _arc_b);
-     * });
-     * h.join().unwrap();
-     * ```
-     *
-     * ### 总结
-     * - 实现 Send 特征的类型可以在线程间安全的传递其所有权，即数据支持在线程中转移
-     * - 实现 Sync 特征的类型可以在线程间安全的共享(通过引用)，即数据支持在线程中共享
-     * - 绝大部分类型都实现了 Send 和 Sync 特征，常见的未实现的有：裸指针、Cell、RefCell、Rc 等
-     * - 可以为自定义类型实现 Send 和 Sync，但是需要 unsafe 代码块
-     * - 可以为部分 Rust 中的类型实现 Send、Sync，但是需要使用 newtype，例如裸指针
+     * **静态变量和常量的区别**
+     * - 静态变量不会被内联，在整个程序中，静态变量只有一个实例，所有的引用都会指向同一个地址
+     * - 为了能在多线程中正常使用，存储在静态变量中的值必须要实现 Sync trait
+     * 
+     * 
      */
 
-    #[derive(Debug)]
-    struct MyBox(*mut u8);
-    // 为裸指针实现 Send 特征，支持数据在不同线程中转移
-    unsafe impl Send for MyBox {}
-    // 为裸指针实现 Sync 特征，支持数据在不同线程中共享
-    unsafe impl Sync for MyBox {}
+    //  静态常量
+    const MAX_ID: usize = usize::MAX / 2;
+    println!("最大的用户 ID = {}", MAX_ID);
 
-    // Send 特征支持数据在不同线程中转移
-    let mut b = MyBox(5 as *mut u8);
-    let h = thread::spawn(move || {
-        println!("{:?}", b);
-    });
-    h.join().unwrap();
-
-    // Sync 特征支持数据在不同的线程中共享，此时涉及到 rust 的所有权问题，需要搭配 Arc 才能在多线程中共享
-    let mut b = MyBox(5 as *mut u8);
-    let arc_b = Arc::new(b);
-    let _arc_b = Arc::clone(&arc_b);
-    let h = thread::spawn(move || {
-        println!("{:?}", _arc_b);
-    });
-    h.join().unwrap();
+    // 静态变量
+    static mut REQUEST_COUNT: usize = 0;
+    unsafe {
+        // 操作 static 类型的变量需要 unsafe 作用域
+        // 因为这种使用方式往往并不安全，当在多线程中同时去修改时，会不可避免的遇到脏数据
+        REQUEST_COUNT = 2;
+    }
+    unsafe {
+        println!("REQUEST_COUNT = {}", REQUEST_COUNT);
+    }
 }
