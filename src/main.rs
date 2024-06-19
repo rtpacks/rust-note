@@ -1,3 +1,5 @@
+use core::fmt;
+
 fn main() {
     /*
      *
@@ -87,13 +89,73 @@ fn main() {
      *
      * #### ok_or ok_or_else
      * ok_or 和 ok_or_else 都是将 Option 转换为 Result 的组合器，两者都接受一个 Err 默认参数，ok_or 直接给定类型参数，ok_or_else 通过闭包给定默认参数。
-     * 
+     *
      * ```rust
      * let id: Option<i32> = Some(1);
      * let id: Result<i32, &str> = id.ok_or("没有数据的错误信息");
      * println!("{}", id.unwrap());
      * ```
-     * 
+     *
+     * ### 自定义错误类型
+     * 虽然标准库定义了大量的错误类型，但光使用这些错误类型往往是不够的。在业务场景中，往往会自定义相应的错误(异常)类型。
+     * 比如返回示例中常见的 JSON：`{ "code": 50020, "msg": "fail" }`。
+     *
+     * 为了更好的定义错误类型，标准库中定义了一些可复用的特征，比如 `std::error::Error` 特征：
+     * ```rust
+     * use std::fmt::{Debug, Display};
+     * pub trait Error: Debug + Display {
+     *     fn source(&self) -> Option<&(Error + 'static)> { ... }
+     * }
+     * ```
+     *
+     * 当自定义类型实现该特征后，该类型就可以作为 Err 来使用。
+     * 实际上，rust 自定义错误类型非常简单，可以不实现 `std::error::Error`，只需要实现 Debug 和 Display 特征即可，这也就是说 source 方法是可选的。
+     * 同时 Debug 特征往往无需手动实现，可以通过 derive 来派生，即可以选择自定义 Debug，也可以选择 derive Debug 特征。
+     *
+     * ```rust
+     * // 自定义错误
+     * struct AppError {
+     *     code: i32,
+     *     msg: String,
+     * }
+     * // 为自定义错误实现 Display 特征
+     * impl fmt::Display for AppError {
+     *     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+     *         write!(
+     *             f,
+     *             "Display: AppError {{ code: {}, message: {} }}, try again!",
+     *             self.code, self.msg
+     *         )
+     *     }
+     * }
+     * // 为自定义错误实现 Debug 特征，也可以通过派生 Debug 实现
+     * impl fmt::Debug for AppError {
+     *     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+     *         write!(
+     *             f,
+     *             "Debug: AppError {{ code: {}, message: {} }}",
+     *             self.code, self.msg
+     *         )
+     *     }
+     * }
+     *
+     * fn produce_error() -> Result<(), AppError> {
+     *     Err(AppError {
+     *         code: 404,
+     *         msg: String::from("Page not found"),
+     *     })
+     * }
+     * match produce_error() {
+     *     Err(err) => eprintln!("{}", err),
+     *     _ => println!("No error"),
+     * }
+     * ```
+     *
+     * 事实上，实现 Debug 和 Display 特征并不是作为 Err 使用的必要条件，把这两个特征实现和相应使用去除也不会报错。为自定义类型实现这两个特征的原因有二:
+     * - 错误打印输出后，才能有实际用处，而打印输出就需要实现这两个特征
+     * - 可以将自定义错误转换成 Box<dyn std::error:Error> 特征对象，用来做归一化不同错误类型
+     *
+     *
      *
      */
 
@@ -140,5 +202,40 @@ fn main() {
             1
         }
     };
-    println!("id1.map(mapFn) = {:?}", id1.map(mapFn))
+    println!("id1.map(mapFn) = {:?}", id1.map(mapFn));
+
+    // 自定义错误
+    struct AppError {
+        code: i32,
+        msg: String,
+    }
+    impl fmt::Display for AppError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Display: AppError {{ code: {}, message: {} }}, try again!",
+                self.code, self.msg
+            )
+        }
+    }
+    impl fmt::Debug for AppError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Debug: AppError {{ code: {}, message: {} }}",
+                self.code, self.msg
+            )
+        }
+    }
+
+    fn produce_error() -> Result<(), AppError> {
+        Err(AppError {
+            code: 404,
+            msg: String::from("Page not found"),
+        })
+    }
+    match produce_error() {
+        Err(err) => eprintln!("{}", err),
+        _ => println!("No error"),
+    }
 }
