@@ -1,4 +1,5 @@
 use core::fmt;
+use std::{io, num};
 
 fn main() {
     /*
@@ -156,6 +157,47 @@ fn main() {
      * - 可以将自定义错误转换成 Box<dyn std::error:Error> 特征对象，用来做归一化不同错误类型
      *
      *
+     * ### From 特征，错误转换
+     * 在一个函数运行中可能会产生不同的错误，如何将这些错误统一成自定义类型的错误呢？rust 提供 `std::convert::From` 特征解决转换问题。
+     * 在生成 String 时经常使用到的 String::from 就是 `std::convert::From` 提供的功能。
+     *
+     * > `std::convert::From` 已在 std::prelude 中，无需手动导入。
+     *
+     * 在错误的转换中，还有一点特别重要，`?` 可以自动将错误进行隐式的强制转换.
+     *
+     * 为自定义错误实现 From 特征，将多种错误类型转换成自定义错误类型：
+     *
+     * ```rust
+     * // 为自定义错误实现 From 特征，将 io::Error 转换成自定义错误
+     * impl From<io::Error> for AppError {
+     *     fn from(error: io::Error) -> Self {
+     *         AppError {
+     *             kind: String::from("io"),
+     *             msg: String::from(error.to_string()),
+     *         }
+     *     }
+     * }
+     * // 为自定义错误实现 From 特征，将 num::ParseIntError 转换成自定义错误
+     * impl From<num::ParseIntError> for AppError {
+     *     fn from(error: num::ParseIntError) -> Self {
+     *         AppError {
+     *             kind: String::from("parse"),
+     *             msg: String::from(error.to_string()),
+     *         }
+     *     }
+     * }
+     *
+     * fn gen_error() -> Result<(), AppError> {
+     *     // 函数标注返回AppError，有一点特别重要，? 可以将错误进行隐式的强制转换，将ParseIntError转换成 AppError
+     *     let num: i32 = String::from("").parse()?;
+     *     Ok(())
+     * }
+     * match gen_error() {
+     *     Err(e) => eprintln!("{}", e),
+     *     _ => println!("No error"),
+     * }
+     * ```
+     *
      *
      */
 
@@ -206,15 +248,15 @@ fn main() {
 
     // 自定义错误
     struct AppError {
-        code: i32,
+        kind: String,
         msg: String,
     }
     impl fmt::Display for AppError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
                 f,
-                "Display: AppError {{ code: {}, message: {} }}, try again!",
-                self.code, self.msg
+                "Display: AppError {{ kind: {}, message: {} }}, try again!",
+                self.kind, self.msg
             )
         }
     }
@@ -222,20 +264,49 @@ fn main() {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
                 f,
-                "Debug: AppError {{ code: {}, message: {} }}",
-                self.code, self.msg
+                "Debug: AppError {{ kind: {}, message: {} }}",
+                self.kind, self.msg
             )
         }
     }
 
     fn produce_error() -> Result<(), AppError> {
         Err(AppError {
-            code: 404,
+            kind: String::from(""),
             msg: String::from("Page not found"),
         })
     }
     match produce_error() {
         Err(err) => eprintln!("{}", err),
+        _ => println!("No error"),
+    }
+
+    // 为自定义错误实现 From 特征，将 io::Error 转换成自定义错误
+    impl From<io::Error> for AppError {
+        fn from(error: io::Error) -> Self {
+            AppError {
+                kind: String::from("io"),
+                msg: String::from(error.to_string()),
+            }
+        }
+    }
+    // 为自定义错误实现 From 特征，将 num::ParseIntError 转换成自定义错误
+    impl From<num::ParseIntError> for AppError {
+        fn from(error: num::ParseIntError) -> Self {
+            AppError {
+                kind: String::from("parse"),
+                msg: String::from(error.to_string()),
+            }
+        }
+    }
+
+    fn gen_error() -> Result<(), AppError> {
+        // 函数标注返回AppError，有一点特别重要，? 可以将错误进行隐式的强制转换，将ParseIntError转换成 AppError
+        let num: i32 = String::from("").parse()?;
+        Ok(())
+    }
+    match gen_error() {
+        Err(e) => eprintln!("{}", e),
         _ => println!("No error"),
     }
 }
