@@ -4,28 +4,7 @@ use std::{io, num};
 fn main() {
     /*
      *
-     * ## unsafe：unsafe 的作用
-     *
-     * 几乎每个语言都有 unsafe 关键字，但 rust 语言使用 unsafe 的原因可能与其它编程语言还有所不同。
-     *
-     * rust 中 unsafe 的存在主要原因是 rust 的静态检查强大且严格保守，这会导致编译器在分析一段代码时，无法分析出它的所有正确性，从而拒绝这段代码，触发编译错误。
-     * 特别是当编译器配合所有权系统一起使用时，有个别问题是真的棘手和难以解决。
-     *
-     * unsafe 存在的另一个原因是：它必须要存在。因为计算机底层的一些硬件就是不安全的，如果 Rust 只允许你做安全的操作，那一些任务就无法完成。
-     *
-     * rust 编译器不仅强大且严格保守，而且编译检查也是很难绕过的。通常想要绕过，最常用的方法就是 unsafe 和 Pin，并且这俩还有一定的限制。
-     *
-     *
-     * ### unsafe 的五种超能力 （unsafe superpowers）
-     *
-     * **unsafe 不意味着块中的代码就一定是危险的或者必然导致内存安全问题**，它只提供了**五个不会被编译器检查内存安全的功能**。
-     * 这意味着：unsafe 并不会关闭借用检查器或禁用任何其他 Rust 安全检查，例如在不安全代码中使用引用，它仍会受到编译器的检查。
-     *
-     * **使用原则一**：没必要用时就不要用，当有必要用时就大胆用，但是尽量控制好边界，让 unsafe 的范围尽可能小。
-     * 因为就算内存访问出错了，也能立刻意识到错误是在 unsafe 代码块中，而不需要花大量时间像无头苍蝇一样去寻找问题所在。
-     * 因此写代码时要尽量控制好 unsafe 的边界大小，越小的 unsafe 越容易定位。
-     *
-     * **使用原则二**：除了控制边界大小，另一个很常用的方式就是在 unsafe 代码块外包裹一层 safe 的 API，例如一个函数声明为 safe 的，然后在其内部有一块儿是 unsafe 代码。
+     * ## unsafe：unsafe superpowers
      *
      * 五种超能力（unsafe superpowers）：
      * - 解引用裸指针
@@ -34,5 +13,99 @@ fn main() {
      * - 实现不安全 trait
      * - 访问 union 的字段
      *
+     * ### 解引用裸指针
+     *
+     * 裸指针(raw pointer，又称原生指针) 在功能上跟引用类似，它需要显式地注明可变性。
+     * 但是裸指针又和引用有所不同，裸指针有两种形式: `*const T` 和 `*mut T`，代表不可变和可变。
+     * `*` 操作符常见的含义是用于解引用，但是在裸指针 `*const T` 和 `*mut` 中，`*` 只是类型名称的一部分，并没有解引用的含义。
+     *
+     * 截至目前，已经有三种类似指针的概念：**引用、智能指针和裸指针**。裸指针与引用、智能指针不同：
+     * - 可以绕过 Rust 的借用规则，可以同时拥有一个数据的可变、不可变指针，甚至还能拥有多个可变的指针
+     * - 不能保证指向的内存是合法的
+     * - 可以是 null
+     * - 没有实现任何自动的回收 (drop)
+     *
+     * 使用裸指针可以创建两个可变指针都指向同一个数据，如果使用安全的 Rust 是无法做到这一点的，因为违背了借用规则。
+     * 因此虽然裸指针可以绕过借用规则，但是由此带来的数据竞争问题，需要程序员着重处理。
+     *
+     * 总之，裸指针跟 C 指针是非常像的，使用它需要以牺牲安全性为前提，但获得了更好的性能，也可以跟其它语言或硬件打交道。
+     *
+     * #### 基于引用创建裸指针
+     * 需要注意：**基于引用创建裸指针是安全的行为，而解引用裸指针才是不安全的行为**。即基于引用创建裸指针时不需要 unsafe，解引用时才需要。
+     *
+     * ```rust
+     * // 基于引用创建裸指针是安全的行为，解引用裸指针才是不安全的
+     * let mut num = 3;
+     * let num_ptr = &num as *const i32; // 创建裸指针是安全的
+     * let num_mutptr1 = &mut num as *mut i32; // 创建可变的裸指针，与不可变裸指针存储是一样的地址，但语义上是区分的
+     * let num_mutptr2 = &mut num as *mut i32; // 裸指针是可以创建多个可变的
+     * unsafe {
+     *     // *num_ptr = 4;
+     *     *num_mutptr1 = 4;
+     *     *num_mutptr2 = 4;
+     * }
+     * println!(
+     *     "num = {}, num_ptr = {:p}, num_mutptr1 = {:p}, num_mutptr2 = {:p}",
+     *     num, num_ptr, num_mutptr1, num_mutptr2
+     * );
+     * ```
+     *
+     * #### 基于智能指针创建裸指针
+     * 与基于引用创建裸指针很类似，基于智能指针创建裸指针是安全的，解引用才是不安全的行为。
+     * ```rust
+     * // 基于智能指针创建裸指针
+     * let mut num_box = Box::new(2);
+     * let num_box_ptr = &*num_box as *const i32;
+     * let num_box_mutptr = &mut *num_box as *mut i32;
+     * unsafe {
+     *     // *num_box_ptr = 4;
+     *     *num_box_mutptr = 4;
+     * }
+     * println!(
+     *     "num_box = {}, num_box_ptr = {:p}, num_box_mutptr = {:p}",
+     *     num_box, num_box_ptr, num_box_mutptr
+     * )
+     * ```
+     *
+     * #### 基于内存地址创建裸指针
+     * 基于一个内存地址来创建裸指针，可以想像这种行为是相当危险的。试图使用任意的内存地址往往是一种未定义的行为(undefined behavior)，因为该内存地址有可能存在值，也有可能没有。
+     * 同时编译器也有可能会优化这段代码，会造成没有任何内存访问发生，甚至程序还可能发生段错误(segmentation fault)。
+     *
+     * 正常项目几乎不会基于内存地址创建裸指针的做法。
+     *
+     *
+     * ### 调用 unsafe 函数或方法
+     * unsafe 函数从外表上来看跟普通函数并无区别，唯一的区别就是它需要使用 unsafe fn 来进行定义。
+     * 这种定义方式是为了告诉调用者：当调用此函数时需要注意它的相关需求，因为 Rust 无法担保调用者在使用该函数时能满足它所需的一切需求。
+     *
+     *
      */
+
+    // 基于引用创建裸指针是安全的行为，解引用裸指针才是不安全的
+    let mut num = 3;
+    let num_ptr = &num as *const i32; // 创建裸指针是安全的
+    let num_mutptr1 = &mut num as *mut i32; // 创建可变的裸指针，与不可变裸指针存储是一样的地址，但语义上是区分的
+    let num_mutptr2 = &mut num as *mut i32; // 裸指针是可以创建多个可变的
+    unsafe {
+        // *num_ptr = 4;
+        *num_mutptr1 = 4;
+        *num_mutptr2 = 4;
+    }
+    println!(
+        "num = {}, num_ptr = {:p}, num_mutptr1 = {:p}, num_mutptr2 = {:p}",
+        num, num_ptr, num_mutptr1, num_mutptr2
+    );
+
+    // 基于智能指针创建裸指针
+    let mut num_box = Box::new(2);
+    let num_box_ptr = &*num_box as *const i32;
+    let num_box_mutptr = &mut *num_box as *mut i32;
+    unsafe {
+        // *num_box_ptr = 4;
+        *num_box_mutptr = 4;
+    }
+    println!(
+        "num_box = {}, num_box_ptr = {:p}, num_box_mutptr = {:p}",
+        num_box, num_box_ptr, num_box_mutptr
+    )
 }
