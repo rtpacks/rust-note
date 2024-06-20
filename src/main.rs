@@ -78,6 +78,26 @@ fn main() {
      * unsafe 函数从外表上来看跟普通函数并无区别，唯一的区别就是它需要使用 unsafe fn 来进行定义。
      * 这种定义方式是为了告诉调用者：当调用此函数时需要注意它的相关需求，因为 Rust 无法担保调用者在使用该函数时能满足它所需的一切需求。
      *
+     * 在编写 unsafe 函数时，有一点需要注意：unsafe 函数体中无需使用 unsafe 语句块，unsafe 函数自身就是一个 unsafe 语句块。
+     *
+     * ```rust
+     * unsafe fn gen_unsafe() {
+     *     // 基于智能指针创建裸指针
+     *     let mut num_box = Box::new(2);
+     *     let num_box_ptr = &*num_box as *const i32;
+     *     let num_box_mutptr = &mut *num_box as *mut i32;
+     *     // *num_box_ptr = 4;
+     *     *num_box_mutptr = 4; // unsafe函数中无需unsafe语句块
+     *
+     *     println!(
+     *         "gen_unsafe: num_box = {}, num_box_ptr = {:p}, num_box_mutptr = {:p}",
+     *         num_box, num_box_ptr, num_box_mutptr
+     *     );
+     * }
+     * unsafe { gen_unsafe() }
+     * ```
+     *
+     *
      *
      */
 
@@ -107,5 +127,20 @@ fn main() {
     println!(
         "num_box = {}, num_box_ptr = {:p}, num_box_mutptr = {:p}",
         num_box, num_box_ptr, num_box_mutptr
-    )
+    );
+
+    unsafe fn gen_unsafe() {
+        // 基于智能指针创建裸指针
+        let mut num_box = Box::new(2);
+        let num_box_ptr = &*num_box as *const i32;
+        let num_box_mutptr = &mut *num_box as *mut i32;
+        // *num_box_ptr = 4;
+        *num_box_mutptr = 4;
+
+        println!(
+            "gen_unsafe: num_box = {}, num_box_ptr = {:p}, num_box_mutptr = {:p}",
+            num_box, num_box_ptr, num_box_mutptr
+        );
+    }
+    unsafe { gen_unsafe() }
 }
