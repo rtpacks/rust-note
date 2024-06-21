@@ -158,7 +158,54 @@ fn main() {
      *  println!("{:?}", split_at_mut(&mut arr, 2));
      * ```
      *
+     * ### FFI 外部函数接口
+     * FFI（Foreign Function Interface）外部函数接口是用来与其它语言进行交互的接口设计，但并不是所有语言都称为 FFI。例如在 Java 中称之为 JNI（Java Native Interface）。
      *
+     * FFI 之所以存在是现实中很多代码库都是由不同语言编写的，如果需要使用某个库，但它是由其它语言编写的，往往只有几个选择：
+     * - 对该库进行重写或者移植
+     * - 独立的服务调用（HTTP，gRPC）
+     * - 使用 FFI
+     *
+     * 在大部分情况下，重写或移植程序需要花费大量的时间和精力，独立的服务调用可能不满足时延，此时 FFI 就是最佳选择。
+     * 并且，在将其他语言的代码重构为 Rust 时，先将相关代码引入到 Rust 项目中，然后逐步重构，是一个非常不错的渐进式过程。
+     *
+     * 涉及到不同语言的交互，无法确定这个行为是否安全，因此 rust 的 FFI 需要 unsafe 的支持才能绕过编译器的审查，达到正常编译的目的。
+     *
+     * ```rust
+     * extern "C" {
+     *     fn abs(input: i32) -> i32;
+     * }
+     *
+     * unsafe {
+     *     println!("Absolute value of -3 according to C: {}", abs(-3));
+     * }
+     * ```
+     * C 语言的代码定义在了 extern 代码块中， 而 extern 必须使用 unsafe 才能进行进行调用，原因在于其它语言的代码并不会强制执行 Rust 的规则，因此 Rust 无法对这些代码进行检查，最终还是要靠开发者自己来保证代码的正确性和程序的安全性。
+     *
+     * > 阅读：
+     * > - https://rustwiki.org/zh-CN/book/ch19-01-unsafe-rust.html#使用-extern-函数调用外部代码
+     *
+     * ### ABI
+     * **应用二进制接口 ABI (Application Binary Interface) 定义了如何在汇编层面来调用该函数**。
+     *
+     * 在 extern "C" 代码块列出想要调用的外部函数的签名。其中 "C" 定义了外部函数所使用的 ABI。在所有 ABI 中，C 语言的是最常见的。
+     *
+     *
+     * ### 其它语言调用 Rust 函数
+     * FFI 支持 rust 调用其他语言，也支持其他语言调用 rust。方法是使用 extern 来创建一个接口，其它语言可以通过该接口来调用相关的 Rust 函数。
+     *
+     * 供其他语言调用的 FFI 语法与调用其他语言的 FFI 有所不同，调用其他语言使用 extern 语句块，供其他语言调用是在函数定义时加上 extern 关键字。
+     * 除了加上 extern 关键字外，还需要加上 `#[no_mangle]` 注解，它的作用是告诉 Rust 编译器不要乱改函数的名称。
+     *
+     * > Mangling：rust 编译时可能需要修改函数的名称，目的是为了让名称包含更多的信息，这样其它的编译部分就能从该名称获取相应的信息，这种修改会导致函数名变得相当不可读，并且使原函数名称失效。
+     *
+     * ```rust
+     * #[no_mangle]
+     * pub extern "C" fn call_from_c() {
+     *     println!("Just called a Rust function from C!");
+     * }
+     * ```
+     * 
      */
 
     // 基于引用创建裸指针是安全的行为，解引用裸指针才是不安全的
@@ -221,4 +268,10 @@ fn main() {
     }
     let mut arr = [1, 2, 3, 4];
     println!("{:?}", split_at_mut(&mut arr, 2));
+
+    // FFI
+    extern "C" {
+        fn abs(input: i32) -> i32;
+    }
+    unsafe { println!("{}", abs(-3)) }
 }
