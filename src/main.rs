@@ -1,5 +1,8 @@
 use core::fmt;
-use std::{io, num, slice};
+use std::{io, num, slice, time::Duration};
+
+use futures::executor;
+use tokio::{runtime::Runtime, time::sleep};
 
 fn main() {
     /*
@@ -118,8 +121,87 @@ fn main() {
      *
      * 在 rust 中，通过 async 标记的语法块会被转换成**实现了 Future 特征的状态机**。
      * 与同步调用阻塞当前线程不同，当 Future 执行并遇到阻塞时，它会让出当前线程的控制权，这样其它的 Future 就可以在该线程中运行，这种方式完全不会导致当前线程的阻塞。
+     *
+     * 使用 async 需要导入 `futures` 包：
+     * ```toml
+     * [dependencies]
+     * futures = "0.3.30"
+     * ```
+     * async 函数返回的是一个 Future，可以将Future理解为一个在未来某个时间点被调度执行的任务。
+     * 因此调用 async 函数时，函数不一定会立刻执行，这也是 Future 在 Rust 中是惰性的，只有在被轮询(poll)时才会运行的由来。
+     *
+     *
+     * 想要等待 Future 在当前线程中执行完成后再继续执行线程的其他代码，有两种方式：
+     * - 使用执行器的 block_on，`block_on`会阻塞当前线程直到指定的`Future`执行完成，这种阻塞当前线程以等待任务完成的方式较为简单、粗暴。当然也有运行时的执行器(executor)会提供更加复杂的行为，例如将多个`future`调度到同一个线程上执行。
+     * - 使用 await，这个方式要求调用 async 函数所在的函数也是一个 async 函数，即 await 只能在 async 中使用。await 最大的好处是能够以同步的形式实现异步的执行效果，非常简单、高效，而且很好理解，未来也绝对不会有回调地狱的发生。
+     *
+     *
+     *
+     * **重点注意**：
+     * 与 block_on 不同，`future.await` 暂停的是当前 future 所在的上层 async 函数，而不是阻塞当前线程。
+     * .await 暂停所在的上层 async 函数后会让出当前线程的执行权，异步的等待当前 future 的完成。当前线程可以执行与 `future.await` 上层同级的其它异步 Future，最终实现并发处理的效果。
+     *
+     * rust 的 .await 位置与 JavaScript await 关键字不一样，再加上 .await 非阻塞线程的概念，可能会有 `future.await` 只是暂停了当前的 `future` 错误理解。
+     * 实际上，.await 暂停的是 `future` 所在的上层 `async fn func() { future.await; }` func 函数，让出执行权后当前线程去执行与 `async fn func` 同级的其他异步任务，并不是与当前 `future.await` 同级的其他异步任务。
+     *
+     * 这一点和 JavaScript 的 await 是一样的，`async function a () { await a_1() }` 内部的 `await a_1()` 后暂停的是 a 函数，当让出执行权后当前线程去执行与 a 同级的其他异步任务。
+     *
+     * 所以 `.await` 是非阻塞线程的，当 `future.await` 时，它暂停的是当前 future 所在的上层 async 函数，并让出当前线程的执行权，当前线程可以执行与 `future.await` 上层同级的其它异步 Future。
+     *
+     *
+     * ```rust
+     * use tokio::{runtime::Runtime, time::sleep};
+     *
+     * // await 不会阻塞当前线程，而是让出当前线程的执行权，在 async 函数结束前会一直异步等待 await 结束
+     * async fn do1(time: u64) {
+     *     sleep(Duration::from_secs(time)).await;
+     *     println!("do 1");
+     * }
+     * async fn do2(time: u64) {
+     *     sleep(Duration::from_secs(time)).await;
+     *     println!("do 2");
+     * }
+     * async fn do3() {
+     *     // 先执行 do1，由于 do1 函数被 .await 暂停执行，异步等待完成，并让出执行权给 do2
+     *     // do2 虽然也有 .await 会经历一段暂停执行，并让出执行权的流程，但是暂停时间短，结束的更快，所以先输出的是 do2，后输出的是 do1
+     *     tokio::join!(do1(2), do2(1));
+     *     println!("do 3");
+     * }
+     * let rt = Runtime::new().unwrap();
+     * rt.block_on(do3());
+     * ```
      * 
-     * 
+     * 当然，block_on 与 .await 是可以搭配使用的。
+     *
+     *
+     *
+     *
+     *
+     *
      *
      */
+
+    async fn do_something() {
+        println!("Hello World");
+    }
+    let x = do_something(); // async 函数调用后，不一定会立刻执行
+    executor::block_on(x); // 等待 Future
+
+    // await 不会阻塞当前线程，而是让出当前线程的执行权，在 async 函数结束前会一直异步等待 await 结束
+    async fn do1(time: u64) {
+        sleep(Duration::from_secs(time)).await;
+        println!("do 1");
+    }
+    async fn do2(time: u64) {
+        sleep(Duration::from_secs(time)).await;
+        println!("do 2");
+    }
+    async fn do3() {
+        // 先执行 do1，由于 do1 函数被 .await 暂停执行，异步等待完成，并让出执行权给 do2
+        // do2 虽然也有 .await 会经历一段暂停执行，并让出执行权的流程，但是暂停时间短，结束的更快，所以先输出的是 do2，后输出的是 do1
+        tokio::join!(do1(2), do2(1));
+        println!("do 3");
+    }
+    let rt = Runtime::new().unwrap();
+    rt.block_on(do3());
 }
