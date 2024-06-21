@@ -265,11 +265,6 @@ fn main() {
      * ### 进一步学习
      * - https://blog.logrocket.com/unsafe-rust-how-and-when-not-to-use-it/
      *
-     *
-     *
-     *
-     *
-     *
      */
 
     // 基于引用创建裸指针是安全的行为，解引用裸指针才是不安全的
