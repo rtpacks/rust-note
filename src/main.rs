@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{io, num};
+use std::{io, num, slice};
 
 fn main() {
     /*
@@ -78,7 +78,8 @@ fn main() {
      * unsafe 函数从外表上来看跟普通函数并无区别，唯一的区别就是它需要使用 unsafe fn 来进行定义。
      * 这种定义方式是为了告诉调用者：当调用此函数时需要注意它的相关需求，因为 Rust 无法担保调用者在使用该函数时能满足它所需的一切需求。
      *
-     * 在编写 unsafe 函数时，有一点需要注意：unsafe 函数体中无需使用 unsafe 语句块，unsafe 函数自身就是一个 unsafe 语句块。
+     * 在编写 unsafe 函数时，有一点需要注意：
+     * unsafe 函数体中无需使用 unsafe 语句块，unsafe 函数自身就是一个 unsafe 语句块，但一个函数包含了 unsafe 代码不代表需要将整个函数都定义为 unsafe fn。
      *
      * ```rust
      * unsafe fn gen_unsafe() {
@@ -97,6 +98,65 @@ fn main() {
      * unsafe { gen_unsafe() }
      * ```
      *
+     * ### 安全抽象包裹 unsafe 代码
+     *
+     * 一个函数包含了 unsafe 代码不代表需要将整个函数都定义为 unsafe fn。事实上，在标准库中有大量的安全函数，它们内部都包含了 unsafe 代码块，例如 split_at_mut。
+     *
+     * 需求：将一个数组分成两个切片，且每一个切片都要求是可变的。类似这种需求在安全 Rust 中是很难实现的，因为要对同一个数组做两个可变借用，这不符合借用规则。
+     * ```rust
+     * fn split_at_mut(slice: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+     *     let len = slice.len();
+     *     assert!(mid <= len);
+     *
+     *     (&mut slice[..mid], &mut slice[mid..]) // 出现多个可变借用，不符合 rust 的借用规则，编译失败
+     * }
+     * ```
+     *
+     * 使用 unsafe 绕过借用规则
+     * ```rust
+     * // 安全抽象包裹 unsafe 代码，即将一个unsafe语句块放在安全的rust中
+     * fn split_at_mut(_slice: &mut [i32], point: usize) -> (&mut [i32], &mut [i32]) {
+     *     let len = _slice.len();
+     *     assert!(point < len);
+     *
+     *     let ptr = _slice.as_mut_ptr();
+     *     // (&mut _slice[..point], &mut _slice[point..]) 出现多个可变借用，不符合 rust 的借用规则，编译失败
+     *     unsafe {
+     *         // 从可变裸指针获取可变引用
+     *         (
+     *             slice::from_raw_parts_mut(ptr, point),
+     *             slice::from_raw_parts_mut(ptr.add(point), len - point),
+     *         )
+     *     }
+     * }
+     * let mut arr = [1, 2, 3, 4];
+     * println!("{:?}", split_at_mut(&mut arr, 2));
+     * ```
+     *
+     * 有几点需要注意：
+     * as_mut_ptr 会返回指向 slice 首地址的裸指针 `*mut i32`
+     * slice::from_raw_parts_mut 方法通过指针和长度来创建一个新的切片，是一个unsafe方法。简单来说，该切片的初始地址是 ptr，长度为 point
+     * ptr.add(point) 可以获取第二个切片的初始地址，是一个unsafe方法。由于切片中的元素是 i32 类型，每个元素都占用了 4 个字节的内存大小，因此不能简单的用 `ptr + mid` 来作为初始地址，而应该使用 `ptr + 4 * mid`，但是这种使用方式并不安全，因此 .add 方法是最佳选择
+     *
+     * ```rust
+     *  // 安全抽象包裹 unsafe 代码，即将一个unsafe语句块放在安全的rust中
+     *  fn split_at_mut(_slice: &mut [i32], point: usize) -> (&mut [i32], &mut [i32]) {
+     *      let len = _slice.len();
+     *      assert!(point < len);
+     *
+     *      let ptr = _slice.as_mut_ptr();
+     *      // (&mut _slice[..point], &mut _slice[point..]) 出现多个可变借用，不符合 rust 的借用规则，编译失败
+     *      unsafe {
+     *          // 从可变裸指针获取可变引用
+     *          (
+     *              slice::from_raw_parts_mut(ptr, point), // from_raw_parts_mut 通过指针和长度来创建一个新的切片，是一个unsafe方法
+     *              slice::from_raw_parts_mut(ptr.add(point), len - point), // ptr.add(point) 可以获取第二个切片的初始地址，是一个unsafe方法
+     *          )
+     *      }
+     *  }
+     *  let mut arr = [1, 2, 3, 4];
+     *  println!("{:?}", split_at_mut(&mut arr, 2));
+     * ```
      *
      *
      */
@@ -143,4 +203,22 @@ fn main() {
         );
     }
     unsafe { gen_unsafe() }
+
+    // 安全抽象包裹 unsafe 代码，即将一个unsafe语句块放在安全的rust中
+    fn split_at_mut(_slice: &mut [i32], point: usize) -> (&mut [i32], &mut [i32]) {
+        let len = _slice.len();
+        assert!(point < len);
+
+        let ptr = _slice.as_mut_ptr();
+        // (&mut _slice[..point], &mut _slice[point..]) 出现多个可变借用，不符合 rust 的借用规则，编译失败
+        unsafe {
+            // 从可变裸指针获取可变引用
+            (
+                slice::from_raw_parts_mut(ptr, point), // from_raw_parts_mut 通过指针和长度来创建一个新的切片，是一个unsafe方法
+                slice::from_raw_parts_mut(ptr.add(point), len - point), // ptr.add(point) 可以获取第二个切片的初始地址，是一个unsafe方法
+            )
+        }
+    }
+    let mut arr = [1, 2, 3, 4];
+    println!("{:?}", split_at_mut(&mut arr, 2));
 }
