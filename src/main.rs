@@ -185,13 +185,13 @@ fn main() {
      * > 阅读：
      * > - https://rustwiki.org/zh-CN/book/ch19-01-unsafe-rust.html#使用-extern-函数调用外部代码
      *
-     * ### ABI
+     * #### ABI
      * **应用二进制接口 ABI (Application Binary Interface) 定义了如何在汇编层面来调用该函数**。
      *
      * 在 extern "C" 代码块列出想要调用的外部函数的签名。其中 "C" 定义了外部函数所使用的 ABI。在所有 ABI 中，C 语言的是最常见的。
      *
      *
-     * ### 其它语言调用 Rust 函数
+     * #### 其它语言调用 Rust 函数
      * FFI 支持 rust 调用其他语言，也支持其他语言调用 rust。方法是使用 extern 来创建一个接口，其它语言可以通过该接口来调用相关的 Rust 函数。
      *
      * 供其他语言调用的 FFI 语法与调用其他语言的 FFI 有所不同，调用其他语言使用 extern 语句块，供其他语言调用是在函数定义时加上 extern 关键字。
@@ -205,7 +205,71 @@ fn main() {
      *     println!("Just called a Rust function from C!");
      * }
      * ```
+     *
+     * ### 访问或修改可变静态变量
+     * 在之前的全局变量章节中有介绍。
+     *
+     * ### unsafe 特征
+     * 之所以会有 unsafe 的特征，是因为该特征至少有一个方法包含有编译器无法验证的内容。unsafe 的特征并不常见，已接触的只有 Send。
+     * unsafe 特征需要使用 unsafe impl 实现方法，unsafe impl 通知编译器，程序相应的正确性由程序员保证。
+     *
+     * 阅读：https://course.rs/advance/unsafe/superpowers.html#实现-unsafe-特征
+     *
+     * ### 访问 union 中的字段
+     * union 主要用于跟 C 代码进行交互，访问 union 的字段是不安全的，因为 Rust 无法保证当前存储在 union 实例中的数据类型。
+     *
+     * ```rust
+     * #[repr(C)]
+     * union MyUnion {
+     *     f1: u32,
+     *     f2: f32,
+     * }
+     * ```
+     * union 的使用方式与结构体很相似，但是 union 的所有字段都共享同一个存储空间，意味着往 union 的某个字段写入值，会导致其它字段的值会被覆盖。
+     *
+     * ### 实用工具库
+     * unsafe 和 FFI 在 Rust 的使用场景中是相当常见，因此社区已经开发出一些实用的工具，可以改善相应的开发体验。这一部分可以在开发中尝试不同的工具。
+     *
+     * #### rust-bindgen 和 cbindgen
+     * 对于 FFI 调用来说，保证接口的正确性是非常重要的，这两个库可以帮我们自动生成相应的接口。
+     * 其中 rust-bindgen 用于生成在 Rust 中访问 C 的代码，而 cbindgen 则相反，用于生成在 C 中访问 Rust 的代码。
+     *
+     * #### cxx
+     * 如果需要跟 C++ 代码交互，则推荐使用 cxx，它提供了双向的调用，最大的优点就是安全，无需使用 unsafe 语句块。
+     *
+     * #### Miri
+     * miri 可以生成 Rust 的中间层表示 MIR，它可以帮助检查常见的未定义行为(UB = Undefined Behavior)，例如
+     * - 内存越界检查和内存释放后再使用(use-after-free)
+     * - 使用未初始化的数据
+     * - 数据竞争
+     * - 内存对齐问题
+     *
+     * 可以通过 rustup component add miri 来安装它，并通过 cargo miri 来使用，同时还可以使用 cargo miri test 来运行测试代码。
+     * 但需要注意的是，它只能帮助识别被执行代码路径的风险，那些未被执行到的代码是没办法被识别的。
+     *
+     * #### Prusti
+     * prusti 需要自己来构建一个证明，然后通过它证明代码中的不变量是正确被使用的，当在安全代码中使用不安全的不变量时，就会非常有用。
+     * 阅读：https://viperproject.github.io/prusti-dev/user-guide/
+     *
+     * #### Clippy
+     * 官方的 clippy 检查器提供了有限的 unsafe 支持，虽然不多但是至少有一定帮助。例如 missing_safety_docs 检查可以帮助检查哪些 unsafe 函数遗漏了文档。
+     * 需要注意的是：Rust 编译器并不会默认开启所有检查，可以调用 rustc -W help 来看看最新的信息。
+     *
+     * #### 模糊测试(fuzz testing)
+     * 在 Rust Fuzz Book 中列出了一些 Rust 可以使用的模糊测试方法。同时还可以使用 rutenspitz 这个过程宏来测试有状态的代码，例如数据结构。
+     *
+     * ### 总结
+     * unsafe 只应该用于仅限的五种场景，其它场景应该坚决的使用安全的代码。
+     * 总之，能不使用 unsafe 一定不要使用，就算使用也要控制好边界，让范围尽可能的小，只有真的需要 unsafe 的代码才应该包含其中, 而不是将无关代码也纳入进来。
      * 
+     * ### 进一步学习
+     * - https://blog.logrocket.com/unsafe-rust-how-and-when-not-to-use-it/
+     *
+     *
+     *
+     *
+     *
+     *
      */
 
     // 基于引用创建裸指针是安全的行为，解引用裸指针才是不安全的
