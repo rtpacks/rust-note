@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{io, num, slice, time::Duration};
+use std::{io, num, slice, thread, time::Duration};
 
 use futures::executor;
 use tokio::{runtime::Runtime, time::sleep};
@@ -7,7 +7,7 @@ use tokio::{runtime::Runtime, time::sleep};
 fn main() {
     /*
      *
-     * ## 异步编程
+     * ## async 异步编程：概念介绍
      * 如果想开发 Web 服务器、数据库驱动、消息服务等需要高并发的服务，那么异步编程认真对待和学习。
      *
      * 简单来说，异步编程是一个并发编程模型，目前主流语言基本都支持，当然，可能支持的方式有所不同。
@@ -170,14 +170,54 @@ fn main() {
      * let rt = Runtime::new().unwrap();
      * rt.block_on(do3());
      * ```
-     * 
+     *
      * 当然，block_on 与 .await 是可以搭配使用的。
      *
      *
+     * #### 简单的并发场景
+     * 一个厨房，多个人做饭往往是煲饭和做菜同时进行的，简单来看，煲饭的流程分为淘米和蒸饭，做菜的流程分为洗菜、上火炒菜。
+     * 具体来看，煲饭流程中的淘米要在蒸饭之前执行完成，做菜流程中的洗菜要在上火炒菜前执行完成。
      *
+     * 可以设计一个简单并发流程，并发煲饭做菜任务，直至两者都完成后才能吃饭。
      *
+     * ```rust
+     * // 做饭任务的简单并发
+     * // 淘米
+     * async fn wash_rice() {
+     *     tokio::time::sleep(Duration::from_secs(3)).await;
+     *     println!("wash_rice");
+     * }
+     * // 蒸饭
+     * async fn steamed_rice() {
+     *     tokio::time::sleep(Duration::from_secs(6)).await;
+     *     println!("steamed_rice");
+     * }
+     * async fn rice_flow() {
+     *     wash_rice().await;
+     *     steamed_rice().await;
+     * }
      *
+     * // 洗菜
+     * async fn wash_vegetables() {
+     *     tokio::time::sleep(Duration::from_secs(3)).await;
+     *     println!("wash_vegetables");
+     * }
+     * // 烧菜
+     * async fn make_vegetables() {
+     *     tokio::time::sleep(Duration::from_secs(4)).await;
+     *     println!("make_vegetables");
+     * }
+     * async fn vegetables_flow() {
+     *     wash_vegetables().await;
+     *     make_vegetables().await;
+     * }
      *
+     * async fn cook() {
+     *     tokio::join!(rice_flow(), vegetables_flow());
+     *     println!("eating");
+     * }
+     * rt.block_on(cook());
+     * ```
      *
      */
 
@@ -204,4 +244,41 @@ fn main() {
     }
     let rt = Runtime::new().unwrap();
     rt.block_on(do3());
+
+    // 做饭任务的简单并发
+    // 淘米
+    async fn wash_rice() {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        println!("wash_rice");
+    }
+    // 蒸饭
+    async fn steamed_rice() {
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        println!("steamed_rice");
+    }
+    async fn rice_flow() {
+        wash_rice().await;
+        steamed_rice().await;
+    }
+
+    // 洗菜
+    async fn wash_vegetables() {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        println!("wash_vegetables");
+    }
+    // 烧菜
+    async fn make_vegetables() {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        println!("make_vegetables");
+    }
+    async fn vegetables_flow() {
+        wash_vegetables().await;
+        make_vegetables().await;
+    }
+
+    async fn cook() {
+        tokio::join!(rice_flow(), vegetables_flow());
+        println!("eating");
+    }
+    rt.block_on(cook());
 }
