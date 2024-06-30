@@ -287,6 +287,7 @@ fn main() {
      *             // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
      *             mutex.completed = true;
      *
+     * +           // 在异步任务结束后，调用 poll Future 的 waker
      * +           if let Some(waker) = mutex.waker.take() {
      * +               waker.wake()
      * +           }
@@ -423,6 +424,7 @@ fn main() {
                 // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
                 mutex.completed = true;
 
+                // 在异步任务结束后，调用 poll Future 的 waker
                 if let Some(waker) = mutex.waker.take() {
                     waker.wake()
                 }
