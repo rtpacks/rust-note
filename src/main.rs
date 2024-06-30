@@ -1,6 +1,11 @@
-use std::{thread, time::Duration};
+use std::{
+    pin::Pin,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use futures::Future;
+use futures::{task, Future, FutureExt};
 use tokio::net::TcpSocket;
 
 fn main() {
@@ -74,6 +79,9 @@ fn main() {
      * 通过 Future，无需开发者手动管理轮询逻辑，在数据未准备好前注册 wake 函数并返回 `Poll::Pedning` 状态。
      * 执行器暂停当前 Future 的执行，等数据准备好时，socket 内部调用注册的 wake 回调函数通知执行器可以运行当前的 Future，运行后获取 `Poll::Ready` 状态，表示可以结束。
      *
+     * 注意，当前 Future 是有一个数据可以表达任务状态的，如 `socket.has_data_to_read`，也就是 poll Future 后获取的状态信息来源于当前 Future 某个数据表达的状态。
+     * 简单来说：**Future 一定要有一个能表达任务状态的数据**，这样执行器在 poll Future 时才知道对 Future 的操作是等待 `Poll::Pedning` 还是结束 `Poll::Ready`。
+     *
      *
      * 这种由执行器调度执行，回调函数作为通信触发的方式，能为 IO 密集型带来极高的并发量，并且可以做到无内存分配的状态机即无需手动管理执行状态和维护相关的同步信息。
      *
@@ -136,6 +144,80 @@ fn main() {
      *     // 1. `self` 是 `Pin<&mut Self>`，而不是 `&mut self`
      *     // 2. `wake: fn()` 修改为 `cx: &mut Context<'_>`:
      *     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+     * }
+     * ```
+     *
+     * ### Waker 唤醒任务
+     * 正常情况下，Future 是一个耗时任务，在第一次被 poll 时通常还未完成。此时 Future 就需要在自身再次准备好被执行时，借助 Waker 通知执行器，让执行器再次调度执行 Future 自身。
+     *
+     * 为了简化实现以及降低理解成本，可以新开一个线程，利用线程休眠模拟 Future 的异步任务（例如网络请求），线程休眠中代表 Future 的异步任务正在执行，线程休眠结束代表 Future 的异步任务运行结束，可以通知执行器调用 poll，以便 Future 被执行。
+     *
+     * 在之前的 SimpleFuture 中有一个注意点：
+     * **Future 一定要有一个能表达任务状态的数据**，这样执行器在 poll Future 时才知道对 Future 的操作是等待 `Poll::Pedning` 还是结束 `Poll::Ready`。
+     *
+     * 根据这个注意点，TimeFuture 需要一个状态用来标识 TimeFuture 的异步任务是否完成，这个状态又是由新线程的休眠状态决定，所以 TimeFuture 要与新线程共享这份数据。
+     * 同时由于是在不同线程间共享状态，需要考虑所有权和并发状态，即需要使用 Arc 和 Mutex 两个工具。
+     *
+     *
+     * **整体流程如下：**
+     *
+     * 新线程与 TimeFuture 共享一个状态，TimeFuture 根据这个状态标识 TimeFuture 的异步任务是否完成。
+     * 在生成 TimeFuture 时开始执行异步任务，当前案例中，异步任务就是新线程休眠。
+     * 线程休眠结束后修改与 TimeFuture 共享的状态数据并调用 wake，表示 Future 的异步任务执行结束，可以再次被 poll。
+     *
+     * ```rust
+     * struct ShareState {
+     *     // 异步任务是否已经结束（线程休眠是否已经结束）
+     *     completed: bool,
+     * }
+     *
+     * // TimeFuture 需要一个状态标识是否完成，这个状态是由休眠线程传递的，涉及到多线程需要使用 Arc，并且状态应该是带锁的，避免多线程数据访问问题
+     * struct TimeFuture {
+     *     share_state: Arc<Mutex<ShareState>>,
+     * }
+     * impl Future for TimeFuture {
+     *     type Output = ();
+     *
+     *     fn poll(
+     *         self: Pin<&mut Self>,
+     *         cx: &mut std::task::Context<'_>,
+     *     ) -> std::task::Poll<Self::Output> {
+     *         // poll 时检查任务状态，来确定是否可以结束当前 Future
+     *         let mut share_state = self.share_state.lock().unwrap();
+     *
+     *         if share_state.completed {
+     *             std::task::Poll::Ready(())
+     *         } else {
+     *             std::task::Poll::Pending
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * 以上代码可以描述一个 Future 的运行逻辑，但还缺少三个步骤：
+     * 1. Future 的创建
+     * 2. Future 执行异步任务（新线程休眠）
+     * 3. Future 执行完异步任务（线程休眠）后让执行器再次 poll 当前 Future
+     *
+     * 创建 Future 和 Future 执行异步任务
+     * ```rust
+     * // 实现 Future 运行异步任务的逻辑
+     * impl TimeFuture {
+     *     fn new(duration: Duration) -> Self {
+     *         let share_state = Arc::new(Mutex::new(ShareState { completed: false }));
+     *
+     *         let _share_state = Arc::clone(&share_state);
+     *         // 用线程休眠模拟异步任务
+     *         thread::spawn(move || {
+     *             thread::sleep(duration);
+     *             let mut mutex = _share_state.lock().unwrap();
+     *             // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
+     *             // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
+     *             mutex.completed = true;
+     *         });
+     *
+     *         Self { share_state }
+     *     }
      * }
      * ```
      *
@@ -209,6 +291,53 @@ fn main() {
                 // 至少还有一个 Future 没有完成任务，因此返回 `Poll::Pending`。当该 Future 再次准备好时，通过调用`wake()`函数来继续执行
                 Poll::Pending
             }
+        }
+    }
+
+    // 利用线程休眠模拟异步任务，如网络请求
+    struct ShareState {
+        // 异步任务是否已经结束（线程休眠是否已经结束）
+        completed: bool,
+    }
+
+    // TimeFuture 需要一个状态标识是否完成，这个状态是由休眠线程传递的，涉及到多线程需要使用 Arc，并且状态应该是带锁的，避免多线程数据访问问题
+    struct TimeFuture {
+        share_state: Arc<Mutex<ShareState>>,
+    }
+    // 实现 Future poll 的逻辑
+    impl Future for TimeFuture {
+        type Output = ();
+
+        fn poll(
+            self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            // poll 时检查任务状态，来确定是否可以结束当前 Future
+            let mut share_state = self.share_state.lock().unwrap();
+
+            if share_state.completed {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+    }
+    // 实现 Future 运行异步任务的逻辑
+    impl TimeFuture {
+        fn new(duration: Duration) -> Self {
+            let share_state = Arc::new(Mutex::new(ShareState { completed: false }));
+
+            let _share_state = Arc::clone(&share_state);
+            // 用线程休眠模拟异步任务
+            thread::spawn(move || {
+                thread::sleep(duration);
+                let mut mutex = _share_state.lock().unwrap();
+                // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
+                // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
+                mutex.completed = true;
+            });
+
+            Self { share_state }
         }
     }
 }
