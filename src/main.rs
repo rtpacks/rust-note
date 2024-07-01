@@ -1,11 +1,14 @@
 use std::{
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc::{self, Receiver, SyncSender},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
 
-use futures::{task, Future, FutureExt};
+use futures::{future::BoxFuture, task, Future, FutureExt};
 use tokio::net::TcpSocket;
 
 fn main() {
@@ -250,7 +253,7 @@ fn main() {
      * }
      * ```
      *
-     * poll Future 时存储 waker，此时才开始执行异步任务，这也是为什么 future 被称为是惰性的，因为只有在第一次 poll 后才会开始执行。
+     * poll Future 时存储 waker，此时才开始执行异步任务，这也是为什么 future 被称为是惰性的，因为只有在第一次 poll 后才会开始执行。在编写 Future 时也需要注意应将异步任务放在第一次 poll 中执行。
      * ```rust
      * // TimeFuture 需要一个状态标识是否完成，这个状态是由休眠线程传递的，涉及到多线程需要使用 Arc，并且状态应该是带锁的，避免多线程数据访问问题
      * struct TimeFuture {
@@ -277,7 +280,7 @@ fn main() {
      *                 let _shared_state = Arc::clone(&self.shared_state);
      *                 // 用线程休眠模拟异步任务
      *                 thread::spawn(move || {
-     *                     thread::sleep(Duration::from_secs(2));
+     *                     thread::sleep(Duration::from_secs(6));
      *                     let mut mutex = _shared_state.lock().unwrap();
      *                     // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
      *                     // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
@@ -292,7 +295,10 @@ fn main() {
      *                 std::task::Poll::Pending
      *             }
      *             FutureStatus::pending => std::task::Poll::Pending,
-     *             FutureStatus::completed => std::task::Poll::Ready(()),
+     *             FutureStatus::completed => {
+     *                 println!("completed");
+     *                 std::task::Poll::Ready(())
+     *             }
      *         };
      *     }
      * }
@@ -309,7 +315,35 @@ fn main() {
      * }
      * ```
      *
-     * 至此，一个简单的 TimeFuture 就已创建成功，接下来需要让它跑起来。
+     * 至此，一个简单的 TimeFuture 就已创建成功，测试代码：
+     * ```rust
+     * futures::executor::block_on(TimeFuture::new());
+     * ```
+     *
+     * ### 执行器 Executor
+     * Rust 的 Future 是惰性的，只有被 poll 后才会开始执行，rust poll Future 一般有两种方式：
+     * - 在 async 函数中使用 .await 来调用另一个 async 函数，这个方式只能解决 async 内部的问题，因为 `.await` 只允许用在 async 函数中。因此这种方式不能在非 async 函数中**阻塞等待 async 函数的完成**，也就可能导致 async 函数的 Future 还未开始执行，当前的非 async 函数就已经退出函数栈。
+     * - 执行器 executor 会管理一批 Future (最外层的 async 函数)，然后通过不停地 poll 推动它们直到完成。最开始，执行器会先 poll 一次 Future ，接着不会主动去 poll，而是等待 Future 通过调用 wake 函数来通知它可以继续，它才会继续去 poll。这种 wake 通知然后 poll 的方式会不断重复，直到 Future 完成。
+     *
+     * 在 `TimeFuture` 的实现测试中，使用的就是执行器 poll Future。执行器会不断 poll Future 直至结束。下面来构建一个自己的执行器，用来运行自定义的 `TimeFuture`。
+     *
+     * #### 构建执行器
+     * > 这里将每个步骤描述的比较详细，如果只需要了解，可以看：https://course.rs/advance/async/future-excuting.html#执行器-executor
+     *
+     * 和 JavaScript 的事件循环队列类似，rust 通过维护一个消息通道（channel）来实现执行器 Executor 的调度执行。
+     *
+     * 通过同步消息通道，简单实现一个 Executor，具体划分：
+     * - 执行器 Executor 作为通道的接收者 Receiver，如果有 Future 进入消息通道，Executor 就开始执行，否则消息通道为空时，阻塞当前函数。
+     * - 创建者 `Spawner` 作为发送者 Transmitter 将创建 Future 并将其发送到消息通道中，触发执行器 Executor 去 poll Future。
+     *
+     * 一个任务准备好执行时（第 1 次被 poll，第 N+1 次主动触发 poll），它会将自己放入消息通道中，然后等待执行器 poll。
+     *
+     *
+     *
+     *
+     *
+     *
+     *
      *
      */
 
@@ -422,7 +456,7 @@ fn main() {
                     let _shared_state = Arc::clone(&self.shared_state);
                     // 用线程休眠模拟异步任务
                     thread::spawn(move || {
-                        thread::sleep(Duration::from_secs(2));
+                        thread::sleep(Duration::from_secs(6));
                         let mut mutex = _shared_state.lock().unwrap();
                         // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
                         // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
@@ -437,7 +471,10 @@ fn main() {
                     std::task::Poll::Pending
                 }
                 FutureStatus::pending => std::task::Poll::Pending,
-                FutureStatus::completed => std::task::Poll::Ready(()),
+                FutureStatus::completed => {
+                    println!("completed");
+                    std::task::Poll::Ready(())
+                }
             };
         }
     }
@@ -452,4 +489,35 @@ fn main() {
             Self { shared_state }
         }
     }
+
+    futures::executor::block_on(TimeFuture::new());
+
+    // 通过同步消息通道模拟 Executor 调度流程
+    struct FutureChannel(Spawner, Executor);
+    impl FutureChannel {
+        fn new(size: usize) -> Self {
+            let (tx, rx) = mpsc::sync_channel(size);
+            Self(Spawner { task_sender: tx }, Executor { task_queue: rx })
+        }
+    }
+    #[derive(Clone)]
+    struct Spawner {
+        task_sender: SyncSender<Arc<Mutex<BoxFuture<'static, ()>>>>,
+    }
+    impl Spawner {
+        fn spawn(&self, future: impl Future<Output = ()> + 'static + Send) {
+            let future = future.boxed();
+            // 将 Future 发送到任务通道中
+            self.task_sender
+                .send(Arc::new(Mutex::new(future)))
+                .expect("任务队列已满");
+        }
+    }
+    struct Executor {
+        // 一个Future一般只会在一个线程中执行，不需要Mutex，但是编译器无法知道`Future`只会在一个线程内被修改，并不会被跨线程修改。
+        // 因此需要使用`Mutex`来满足编译器对线程安全的校验，如果是生产级的执行器实现，不会使用`Mutex`，因为会带来性能上的开销，取而代之的是使用`UnsafeCell`
+        task_queue: Receiver<Arc<Mutex<BoxFuture<'static, ()>>>>,
+    }
+
+    // 测试
 }
