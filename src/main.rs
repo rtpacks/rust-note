@@ -232,19 +232,30 @@ fn main() {
      *
      * 因此，第三步骤其实是当前 Future 被 poll 执行时将 wake 存储起来，然后外部在异步任务结束后，调用 wake 函数让执行器正确识别 Future 并再次 poll 当前 Future 的过程。
      *
+     * **注意：这里的外部是指当前线程外。**
+     *
      * SharedState 增加存储 waker：
      * ```rust
      * // 利用线程休眠模拟异步任务，如网络请求
+     * enum FutureStatus {
+     *     init,
+     *     pending,
+     *     completed,
+     * }
      * struct SharedState {
-     *     // 异步任务是否已经结束（线程休眠是否已经结束）
-     *     completed: bool,
+     *     // 异步任务的状态
+     *     status: FutureStatus,
      *     // 当前 Future 被 poll 执行时将 wake 存储起来，然后外部在异步任务结束后，调用 wake 函数让执行器正确识别 Future 并再次 poll 当前 Future
      *     waker: Option<std::task::Waker>,
      * }
      * ```
      *
-     * poll Future 时存储 waker
-     * ```diff
+     * poll Future 时存储 waker，此时才开始执行异步任务，这也是为什么 future 被称为是惰性的，因为只有在第一次 poll 后才会开始执行。
+     * ```rust
+     * // TimeFuture 需要一个状态标识是否完成，这个状态是由休眠线程传递的，涉及到多线程需要使用 Arc，并且状态应该是带锁的，避免多线程数据访问问题
+     * struct TimeFuture {
+     *     shared_state: Arc<Mutex<SharedState>>,
+     * }
      * // 实现 Future poll 的逻辑
      * impl Future for TimeFuture {
      *     type Output = ();
@@ -256,42 +267,42 @@ fn main() {
      *         // poll 时检查任务状态，来确定是否可以结束当前 Future
      *         let mut shared_state = self.shared_state.lock().unwrap();
      *
-     *         if shared_state.completed {
-     *             std::task::Poll::Ready(())
-     *         } else {
-     * +           // 选择每次都`clone`的原因是： `TimerFuture`可以在执行器的不同任务间移动，如果只克隆一次，
-     * +           // 那么获取到的`waker`可能已经被篡改并指向了其它任务，最终导致执行器运行了错误的任务
-     * +           shared_state.waker = Some(cx.waker().clone());
-     *             std::task::Poll::Pending
-     *         }
+     *         return match shared_state.status {
+     *             FutureStatus::init => {
+     *                 // 选择每次都`clone`的原因是： `TimerFuture`可以在执行器的不同任务间移动，如果只克隆一次，
+     *                 // 那么获取到的`waker`可能已经被篡改并指向了其它任务，最终导致执行器运行了错误的任务
+     *                 shared_state.waker = Some(cx.waker().clone());
+     *                 shared_state.status = FutureStatus::pending;
+     *
+     *                 let _shared_state = Arc::clone(&self.shared_state);
+     *                 // 用线程休眠模拟异步任务
+     *                 thread::spawn(move || {
+     *                     thread::sleep(Duration::from_secs(2));
+     *                     let mut mutex = _shared_state.lock().unwrap();
+     *                     // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
+     *                     // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
+     *                     mutex.status = FutureStatus::completed;
+     *
+     *                     // 在异步任务结束后，调用 poll Future 的 waker
+     *                     if let Some(waker) = mutex.waker.take() {
+     *                         waker.wake()
+     *                     }
+     *                 });
+     *
+     *                 std::task::Poll::Pending
+     *             }
+     *             FutureStatus::pending => std::task::Poll::Pending,
+     *             FutureStatus::completed => std::task::Poll::Ready(()),
+     *         };
      *     }
      * }
-     * ```
-     *
-     * 在 Future 异步任务结束时，调用 poll Future 存储的 waker
-     * ```diff
-     * // 实现 Future 运行异步任务的逻辑
+     * // Future 生成
      * impl TimeFuture {
-     *     fn new(duration: Duration) -> Self {
+     *     fn new() -> Self {
      *         let shared_state = Arc::new(Mutex::new(SharedState {
-     *             completed: false,
+     *             status: FutureStatus::init,
      *             waker: None,
      *         }));
-     *
-     *         let _shared_state = Arc::clone(&shared_state);
-     *         // 用线程休眠模拟异步任务
-     *         thread::spawn(move || {
-     *             thread::sleep(duration);
-     *             let mut mutex = _shared_state.lock().unwrap();
-     *             // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
-     *             // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
-     *             mutex.completed = true;
-     *
-     * +           // 在异步任务结束后，调用 poll Future 的 waker
-     * +           if let Some(waker) = mutex.waker.take() {
-     * +               waker.wake()
-     * +           }
-     *         });
      *
      *         Self { shared_state }
      *     }
@@ -299,7 +310,6 @@ fn main() {
      * ```
      *
      * 至此，一个简单的 TimeFuture 就已创建成功，接下来需要让它跑起来。
-     *
      *
      */
 
@@ -375,9 +385,14 @@ fn main() {
     }
 
     // 利用线程休眠模拟异步任务，如网络请求
+    enum FutureStatus {
+        init,
+        pending,
+        completed,
+    }
     struct SharedState {
-        // 异步任务是否已经结束（线程休眠是否已经结束）
-        completed: bool,
+        // 异步任务的状态
+        status: FutureStatus,
         // 当前 Future 被 poll 执行时将 wake 存储起来，然后外部在异步任务结束后，调用 wake 函数让执行器正确识别 Future 并再次 poll 当前 Future
         waker: Option<std::task::Waker>,
     }
@@ -397,38 +412,42 @@ fn main() {
             // poll 时检查任务状态，来确定是否可以结束当前 Future
             let mut shared_state = self.shared_state.lock().unwrap();
 
-            if shared_state.completed {
-                std::task::Poll::Ready(())
-            } else {
-                // 选择每次都`clone`的原因是： `TimerFuture`可以在执行器的不同任务间移动，如果只克隆一次，
-                // 那么获取到的`waker`可能已经被篡改并指向了其它任务，最终导致执行器运行了错误的任务
-                shared_state.waker = Some(cx.waker().clone());
-                std::task::Poll::Pending
-            }
+            return match shared_state.status {
+                FutureStatus::init => {
+                    // 选择每次都`clone`的原因是： `TimerFuture`可以在执行器的不同任务间移动，如果只克隆一次，
+                    // 那么获取到的`waker`可能已经被篡改并指向了其它任务，最终导致执行器运行了错误的任务
+                    shared_state.waker = Some(cx.waker().clone());
+                    shared_state.status = FutureStatus::pending;
+
+                    let _shared_state = Arc::clone(&self.shared_state);
+                    // 用线程休眠模拟异步任务
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_secs(2));
+                        let mut mutex = _shared_state.lock().unwrap();
+                        // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
+                        // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
+                        mutex.status = FutureStatus::completed;
+
+                        // 在异步任务结束后，调用 poll Future 的 waker
+                        if let Some(waker) = mutex.waker.take() {
+                            waker.wake()
+                        }
+                    });
+
+                    std::task::Poll::Pending
+                }
+                FutureStatus::pending => std::task::Poll::Pending,
+                FutureStatus::completed => std::task::Poll::Ready(()),
+            };
         }
     }
-    // 实现 Future 运行异步任务的逻辑
+    // Future 生成
     impl TimeFuture {
-        fn new(duration: Duration) -> Self {
+        fn new() -> Self {
             let shared_state = Arc::new(Mutex::new(SharedState {
-                completed: false,
+                status: FutureStatus::init,
                 waker: None,
             }));
-
-            let _shared_state = Arc::clone(&shared_state);
-            // 用线程休眠模拟异步任务
-            thread::spawn(move || {
-                thread::sleep(duration);
-                let mut mutex = _shared_state.lock().unwrap();
-                // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
-                // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
-                mutex.completed = true;
-
-                // 在异步任务结束后，调用 poll Future 的 waker
-                if let Some(waker) = mutex.waker.take() {
-                    waker.wake()
-                }
-            });
 
             Self { shared_state }
         }
