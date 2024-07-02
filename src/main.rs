@@ -9,7 +9,6 @@ use std::{
 };
 
 use futures::{future::BoxFuture, task, Future, FutureExt};
-use tokio::net::TcpSocket;
 
 fn main() {
     /*
@@ -323,26 +322,123 @@ fn main() {
      * ### 执行器 Executor
      * Rust 的 Future 是惰性的，只有被 poll 后才会开始执行，rust poll Future 一般有两种方式：
      * - 在 async 函数中使用 .await 来调用另一个 async 函数，这个方式只能解决 async 内部的问题，因为 `.await` 只允许用在 async 函数中。因此这种方式不能在非 async 函数中**阻塞等待 async 函数的完成**，也就可能导致 async 函数的 Future 还未开始执行，当前的非 async 函数就已经退出函数栈。
-     * - 执行器 executor 会管理一批 Future (最外层的 async 函数)，然后通过不停地 poll 推动它们直到完成。最开始，执行器会先 poll 一次 Future ，接着不会主动去 poll，而是等待 Future 通过调用 wake 函数来通知它可以继续，它才会继续去 poll。这种 wake 通知然后 poll 的方式会不断重复，直到 Future 完成。
+     * - 执行器 executor 会管理一批 Future (最外层的 async 函数)，然后通过不停地 poll 推动它们直到完成。最开始，执行器会先 poll 一次 Future ，然后不会再主动去 poll，而是等待 Future 通过调用 wake 函数来通知它可以继续，它才会继续去 poll。这种 wake 通知然后 poll 的方式会不断重复，直到 Future 完成。
      *
      * 在 `TimeFuture` 的实现测试中，使用的就是执行器 poll Future。执行器会不断 poll Future 直至结束。下面来构建一个自己的执行器，用来运行自定义的 `TimeFuture`。
      *
      * #### 构建执行器
      * > 这里将每个步骤描述的比较详细，如果只需要了解，可以看：https://course.rs/advance/async/future-excuting.html#执行器-executor
      *
-     * 和 JavaScript 的事件循环队列类似，rust 通过维护一个消息通道（channel）来实现执行器 Executor 的调度执行。
+     * 在 rust 中，执行器是**不停地 poll 推动 Future 获取状态，直到 Future 完成**。需要注意的是，执行器会先 poll 一次 Future，然后不会再主动去 poll，而是等待 Future 通过调用 wake 函数来通知执行器可以继续，执行器才会继续去 poll。
      *
-     * 通过同步消息通道，简单实现一个 Executor，具体划分：
-     * - 执行器 Executor 作为通道的接收者 Receiver，如果有 Future 进入消息通道，Executor 就开始执行，否则消息通道为空时，阻塞当前函数。
-     * - 创建者 `Spawner` 作为发送者 Transmitter 将创建 Future 并将其发送到消息通道中，触发执行器 Executor 去 poll Future。
+     * 观察原有的 TimeFuture 实现，会发现 TimeFuture 不会自动触发，并且在被动触发后只会在异步任务结束时触发一次 wake。
+     * 这与执行器会先 poll 一次 Future，然后等待 Future 调用 wake 来通知执行器可以继续，形成执行器不停的 poll Future 的场景还少了两点：
+     * 1. 执行器需要主动触发一次 Future
+     * 2. Future 需要不断地触发 wake，达到执行器不停的 poll Future 的目的
+     *
+     * rust 通过维护一个消息通道（channel）来实现执行器 Executor 的调度执行，这其中的逻辑与 JavaScript 的事件循环队列非常类似。
+     * 这里通过同步消息通道，简单实现一个 Executor，具体划分为：
+     * - 执行器 `Executor` 作为通道的接收者 Receiver，如果有 Future 进入消息通道，Executor 就开始执行 Future，如果消息通道为空，则阻塞当前函数。
+     * - 创建者 `Spawner` 作为发送者 Transmitter，将创建 Future 并将其发送到消息通道中，触发执行器 `Executor` 去 poll Future。
+     *
+     * **对于当前 Future 缺少的两个点**
+     *
+     * 第一点：执行器 Executor 主动触发 poll 一次 Future。
+     * 这一点很容易实现，模拟流程：创建者（发送者）创建 Future，然后将 Future 发送到消息通道，接收者（执行器）接收，然后主动 poll 一次 Future。
+     *
+     * 第二点：Future 需要不断地触发 wake，达到执行器不停的 poll Future 的目的。
+     * 这一点的实现并不简单，有两种方式可以不断地触发 wake：
+     * 1. 没有任务调度系统，任务状态由 Future 自身管理。Future 在被第一次 poll 后，主动调用 wake，触发 poll。
+     * 2. 有任务调度系统，任务状态由 Executor 管理，可操控性大，Future 也不会引入无关的逻辑。
+     *
+     * 第一种方式，没有任务调度系统，任务状态由 Future 自身管理，很明显可控性不大，如想要根据某个条件切换，Future 的 poll 逻辑耦合度很大：
+     * ```diff
+     * impl Future for TimeFuture {
+     *     type Output = ();
+     *
+     *     fn poll(
+     *         self: Pin<&mut Self>,
+     *         cx: &mut std::task::Context<'_>,
+     *     ) -> std::task::Poll<Self::Output> {
+     *         shared_state.waker = Some(cx.waker().clone());
+     * +       shared_state.waker.wake();
+     *
+     *         ...
+     *
+     *         return match shared_state.status {
+     *              ...
+     *         };
+     *     }
+     * }
+     * ```
+     *
+     * 第二种方式，有任务调度系统，由 Executor 调度管理，可操控性大，Future 的 poll 函数也不会引入无关的逻辑。分析流程：
+     * 1. 构建一个消息任务队列，生成执行器（接收者）和创建者（发送者）。
+     * 2. 执行器从消息通道中阻塞性的接收 Future，当 Future 状态未完成时，会默认调用(第1次或第N+1次) Future 的 poll 函数获取 Future 状态。
+     * 3. 如果 Future 未完成，为了让执行器不停的 poll Future，要将 Future **重新发送到消息通道**中，这样就会重复2步骤，让执行器再次 poll Future。
+     *
+     * > 为什么要使用任务队列来存储待执行的 Future?
+     * > 在使用 rust 提供的执行器时，提到过 Future 的执行方式：“事件通知 -\> 执行” 的方式可以精确的执行该 Future，要比定时轮询所有 Future 来的高效。
+     * > 使用任务队列，就是为了提高效率。
+     * 
+     * 构建消息通道，生成执行器（接收者）和创建者（发送者），伪代码：
+     * ```rust
+     * // 通过同步消息通道模拟 Executor 调度流程
+     * struct FutureChannel(Spawner, Executor);
+     * impl FutureChannel {
+     *     fn new(size: usize) -> Self {
+     *         let (tx, rx) = mpsc::sync_channel(size);
+     *         Self(Spawner { task_sender: tx }, Executor { task_queue: rx })
+     *     }
+     * }
+     * ```
+     *
+     * 执行器从消息通道中阻塞性的接收 Future，当 Future 状态为未完成时，调用 Future 的 poll 函数
+     * ```rust
+     * struct Executor {
+     *     // 一个Future一般只会在一个线程中执行，不需要 Mutex，但是编译器无法知道`Future`只会在一个线程内被修改，并不会被跨线程修改。
+     *     // 因此需要使用`Mutex`来满足编译器对线程安全的校验，如果是生产级的执行器实现，不会使用`Mutex`，因为会带来性能上的开销，取而代之的是使用`UnsafeCell`
+     *     task_queue: Receiver<Arc<Mutex<BoxFuture<'static, ()>>>>,
+     * }
+     * impl Executor {
+     *     fn run(&self) {
+     *         // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
+     *         while let Ok(future) = self.task_queue.recv() {
+     *             let mut mutex_future = future.lock().unwrap();
+     *
+     *             if mutex_future.as_mut().poll(cx).is_pending() {
+     *                 // 重新放回任务队列
+     *             };
+     *         }
+     *     }
+     * }
+     * ```
+     * 
+     * 在实现的代码中很明显有两个问题：
+     * 1. 缺少 Future 特征 poll 函数的参数 Context，也就是 SimpleFuture 特征中用于唤起功能的 wake 函数
+     * 2. 缺少发送者，无法将 Future 重新放回消息通道中
+     * 
+     * 因此，怎么将 waker 传入 poll，以及怎么在调用 wake 将 Future 自身重新发送到消息通道，解决这两个问题是自定义执行器的关键。
+     * 
+     * 其实，SimpleFuture 的 wake 与 Future 的 Context 功能都是用于唤起功能，将 Future 重新放入消息通道中，只是 Context 携带了数据。
+     * Waker 和 wake 函数并不是有高深的魔法，Waker 是存储信息对象，wake 函数是一个触发操作，功能是将 Future 重新发送到消息队列中，Executor 就会自动执行这个 Future。
+     * 
+     * 这个存储结构就是 Waker，在 waker 的介绍中，有这么一段描述：
+     * 每个 Future 在注册其 wake 函数时，可以将自身的信息存储在 Waker 中。当 wake 被调用时，Future 的自身信息会被传递给执行器，从而使执行器能够正确识别并调度特定的 Future。
+     * 
+     *
+     * TODO 继续完成 MyWaker 实现
+     * 定义一个 MyWaker，它能存储 Future 信息，并且在调用 wake 函数时，能将存储 Future 发送到消息通道：
+     * ```rust
+     * struct MyWeaker {}
+     * ```
+     *
+     *
+     * 目前已经提前把 Future 与 wake 。
+     * Future 注册到 Waker 需要 Waker 存储 Future 自身的信息，这样才能保证执行器正确识别并 poll 指定的 Future。
+     * 现在可以看成是 Waker 与 Executor 的交互可以使 Executor 不停的 poll Future。
      *
      * 一个任务准备好执行时（第 1 次被 poll，第 N+1 次主动触发 poll），它会将自己放入消息通道中，然后等待执行器 poll。
-     *
-     *
-     *
-     *
-     *
-     *
      *
      *
      */
@@ -492,6 +588,7 @@ fn main() {
 
     futures::executor::block_on(TimeFuture::new());
 
+    // TODO 继续完成消息通道管理的代码，统一 Executor 和 Spawner，以及解释为什么要从发送 Future 变为将 Future 包裹一层的 Task
     // 通过同步消息通道模拟 Executor 调度流程
     struct FutureChannel(Spawner, Executor);
     impl FutureChannel {
@@ -514,9 +611,21 @@ fn main() {
         }
     }
     struct Executor {
-        // 一个Future一般只会在一个线程中执行，不需要Mutex，但是编译器无法知道`Future`只会在一个线程内被修改，并不会被跨线程修改。
+        // 一个Future一般只会在一个线程中执行，不需要 Mutex，但是编译器无法知道`Future`只会在一个线程内被修改，并不会被跨线程修改。
         // 因此需要使用`Mutex`来满足编译器对线程安全的校验，如果是生产级的执行器实现，不会使用`Mutex`，因为会带来性能上的开销，取而代之的是使用`UnsafeCell`
         task_queue: Receiver<Arc<Mutex<BoxFuture<'static, ()>>>>,
+    }
+    impl Executor {
+        fn run(&self) {
+            // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
+            while let Ok(future) = self.task_queue.recv() {
+                let mut mutex_future = future.lock().unwrap();
+
+                if mutex_future.as_mut().poll(cx).is_pending() {
+                    // 重新放回任务队列
+                };
+            }
+        }
     }
 
     // 测试
