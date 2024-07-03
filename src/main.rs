@@ -486,7 +486,6 @@ fn main() {
      *                     // Future 未完成时，将 Future 再次放入任务队列中
      *                     wrapper.task_sender.send(wrapper.clone());
      *                 };
-     * 
      *             }
      *         }
      *     }
@@ -529,7 +528,7 @@ fn main() {
      *                     // MyWaker::wake(&wrapper)
      *                     wrapper.wake();
      *                 };
-     * 
+     *
      *             }
      *         }
      *     }
@@ -537,8 +536,8 @@ fn main() {
      * ```
      *
      * 现在可以看成是 Waker 与 Executor 的交互可以使 Executor 不停的 poll Future。虽然 poll 包含 waker 的 Context 参数还未完全生成，但整体的触发和实现都体现了。
-     * 生成完整的 Context 包含许多细节，这里利用 futures 提供的 ArcWaker 简化搭建简单可用的执行器这个过程。
      *
+     * 生成完整的 Context 包含许多细节，这里利用 futures 提供的 ArcWaker 简化搭建简单可用的执行器这个过程。
      * ```rust
      * struct FutureWrapper {
      *     future: Mutex<Option<BoxFuture<'static, ()>>>,
@@ -570,11 +569,64 @@ fn main() {
      *             .expect("任务队列已满");
      *     }
      * }
+     *
+     * struct Executor {
+     *     task_queue: Receiver<Arc<FutureWrapper>>,
+     * }
+     * impl Executor {
+     *     fn run(&self) {
+     *         // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
+     *         while let Ok(wrapper) = self.task_queue.recv() {
+     *             let mut mutex_future = wrapper.future.lock().unwrap();
+     *
+     *             // 需要take()，获取到future才能poll，future没有完成，就要放回去。当future完成了，触发waker，wake的时候会将task再次发送到channel，这时候executor再次收到task，再去poll future，future不是pending了，就不再放回task。
+     *             if let Some(mut future) = mutex_future.take() {
+     *                 // 生成关联的 waker
+     *                 let waker = futures::task::waker_ref(&wrapper);
+     *                 // 生成对应的 Context
+     *                 let context = &mut Context::from_waker(&*waker);
+     *
+     *                 // `BoxFuture<T>`是`Pin<Box<dyn Future<Output = T> + Send + 'static>>`的类型别名
+     *                 // 通过调用`as_mut`方法，可以将上面的类型转换成`Pin<&mut dyn Future + Send + 'static>`
+     *                 if future.as_mut().poll(context).is_pending() {
+     *                     // Future 未完成时，将 Future 再次放入任务队列中
+     *                     *mutex_future = Some(future);
+     *                     // 不断轮询的实现
+     *                     wrapper
+     *                         .task_sender
+     *                         .send(wrapper.clone())
+     *                         .expect("任务队列已满");
+     *                 };
+     *             }
+     *         }
+     *     }
+     * }
      * ```
      *
+     * 这里需要注意，使用 take 将元素取出后，原有位置就不会有该元素了。因此在Future未完成前，还需要把他放回原位置。
+     * 如果希望执行器不断轮询 Future，可以将 Future 再次发送到任务队列中。
      *
      *
-     * TODO 为 FutureWrapper 实现 ArcWake 特征，最终实现 Context 和 wake 的调用
+     * 测试自定义执行器
+     * ```rust
+     * // 测试自定义的执行器，将 FutureChannel 改名为 TaskChannel 更合适，结构时不能用类型别名作为构造器
+     * type TaskChannel = FutureChannel;
+     * let FutureChannel(spawner, executor) = TaskChannel::new(4);
+     *
+     * spawner.spawn(async {
+     *     println!("howdy!");
+     *     // 创建定时器Future，并等待它完成
+     *     TimeFuture::new().await;
+     *     println!("done!");
+     * });
+     *
+     * // drop 掉发送者，这样接收者在接收信息时，如果收到通道关闭的信息，就会主动关闭，避免一直阻塞主线程
+     * drop(spawner);
+     * // 运行执行器直到任务队列为空
+     * // 任务运行后，会先打印`howdy!`, 暂停2秒，接着打印 `done!`
+     * executor.run();
+     * ```
+     *
      */
 
     enum Poll<T> {
@@ -686,7 +738,7 @@ fn main() {
                     let _shared_state = Arc::clone(&self.shared_state);
                     // 用线程休眠模拟异步任务
                     thread::spawn(move || {
-                        thread::sleep(Duration::from_secs(6));
+                        thread::sleep(Duration::from_secs(3));
                         let mut mutex = _shared_state.lock().unwrap();
                         // 修改异步任务状态，模拟网络结束连接或IO关闭等场景。
                         // Future 一定要有一个表示执行异步任务状态的数据，这样才能让执行器在 Poll 当前 Future 时知道该结束 `Poll::Ready` 还是等待 `Poll::Pending`
@@ -694,6 +746,7 @@ fn main() {
 
                         // 在异步任务结束后，调用 poll Future 的 waker
                         if let Some(waker) = mutex.waker.take() {
+                            println!("wake call");
                             waker.wake()
                         }
                     });
@@ -720,9 +773,8 @@ fn main() {
         }
     }
 
-    futures::executor::block_on(TimeFuture::new());
+    // futures::executor::block_on(TimeFuture::new());
 
-    // TODO 继续完成消息通道管理的代码，统一 Executor 和 Spawner，以及解释为什么要从发送 Future 变为将 Future 包裹一层的 Task
     // 通过同步消息通道模拟 Executor 调度流程
     struct FutureChannel(Spawner, Executor);
     impl FutureChannel {
@@ -783,6 +835,7 @@ fn main() {
             while let Ok(wrapper) = self.task_queue.recv() {
                 let mut mutex_future = wrapper.future.lock().unwrap();
 
+                // 需要take()，获取到future才能poll，future没有完成，就要放回去。当future完成了，触发waker，wake的时候会将task再次发送到channel，这时候executor再次收到task，再去poll future，future不是pending了，就不再放回task。
                 if let Some(mut future) = mutex_future.take() {
                     // 生成关联的 waker
                     let waker = futures::task::waker_ref(&wrapper);
@@ -793,10 +846,30 @@ fn main() {
                     // 通过调用`as_mut`方法，可以将上面的类型转换成`Pin<&mut dyn Future + Send + 'static>`
                     if future.as_mut().poll(context).is_pending() {
                         // Future 未完成时，将 Future 再次放入任务队列中
-                        // wrapper.task_sender.send(wrapper.clone());
+                        *mutex_future = Some(future);
+                        wrapper
+                            .task_sender
+                            .send(wrapper.clone())
+                            .expect("任务队列已满");
                     };
                 }
             }
         }
     }
+
+    // 测试自定义的执行器，将 FutureChannel 改名为 TaskChannel 更合适，结构时不能用类型别名作为构造器
+    type TaskChannel = FutureChannel;
+    let FutureChannel(spawner, executor) = TaskChannel::new(4);
+
+    spawner.spawn(async {
+        println!("howdy!");
+        // 创建定时器Future，并等待它完成
+        TimeFuture::new().await;
+        println!("done!");
+    });
+    // drop 掉发送者，这样接收者在接收信息时，如果收到通道关闭的信息，就会主动关闭，避免一直阻塞主线程
+    // drop(spawner);
+    // 运行执行器直到任务队列为空
+    // 任务运行后，会先打印`howdy!`, 暂停2秒，接着打印 `done!`
+    executor.run();
 }
