@@ -380,7 +380,7 @@ fn main() {
      * > 为什么要使用任务队列来存储待执行的 Future?
      * > 在使用 rust 提供的执行器时，提到过 Future 的执行方式：“事件通知 -\> 执行” 的方式可以精确的执行该 Future，要比定时轮询所有 Future 来的高效。
      * > 使用任务队列，就是为了提高效率。
-     * 
+     *
      * 构建消息通道，生成执行器（接收者）和创建者（发送者），伪代码：
      * ```rust
      * // 通过同步消息通道模拟 Executor 调度流程
@@ -406,40 +406,105 @@ fn main() {
      *         while let Ok(future) = self.task_queue.recv() {
      *             let mut mutex_future = future.lock().unwrap();
      *
-     *             if mutex_future.as_mut().poll(cx).is_pending() {
+     *             if mutex_future.as_mut().poll(context).is_pending() {
      *                 // 重新放回任务队列
      *             };
      *         }
      *     }
      * }
      * ```
-     * 
-     * 在实现的代码中很明显有两个问题：
-     * 1. 缺少 Future 特征 poll 函数的参数 Context，也就是 SimpleFuture 特征中用于唤起功能的 wake 函数
-     * 2. 缺少发送者，无法将 Future 重新放回消息通道中
-     * 
-     * 因此，怎么将 waker 传入 poll，以及怎么在调用 wake 将 Future 自身重新发送到消息通道，解决这两个问题是自定义执行器的关键。
-     * 
-     * 其实，SimpleFuture 的 wake 与 Future 的 Context 功能都是用于唤起功能，将 Future 重新放入消息通道中，只是 Context 携带了数据。
-     * Waker 和 wake 函数并不是有高深的魔法，Waker 是存储信息对象，wake 函数是一个触发操作，功能是将 Future 重新发送到消息队列中，Executor 就会自动执行这个 Future。
-     * 
-     * 这个存储结构就是 Waker，在 waker 的介绍中，有这么一段描述：
-     * 每个 Future 在注册其 wake 函数时，可以将自身的信息存储在 Waker 中。当 wake 被调用时，Future 的自身信息会被传递给执行器，从而使执行器能够正确识别并调度特定的 Future。
-     * 
      *
+     * 很明显，在实现的代码中存在两个问题：
+     * 1. 缺少 Future 特征 poll 函数的参数 Context，也就是类似 SimpleFuture 特征中用于唤起功能的 wake 函数，wake 函数怎么让 Future 重新放回消息通道
+     * 2. 缺少发送者，无法将 Future 重新放回消息通道中
+     *
+     * 以上两点都是在解决怎么将 Future 重新放回消息通道，解决这个问题是自定义执行器的关键。
+     *
+     * 分析以上信息，可以得到两个重点：
+     * 1. 如果一个 Future 被 Executor poll 后需要重新放入任务队列，那么 Executor 在 poll Future 时必须要拿到发送者，才可以将 Future 重新放入任务队列
+     * 2. 如果调用 wake 函数后需要将 Future 重新放入任务队列，需要拿到发送者与 Future，才可以将 Future 重新放入任务队列
+     *
+     * 执行器在外部将 Future 再次放入任务队列的形式，也可以统一到调用 wake 将 Future 放入任务队列的形式上。
+     *
+     * 以上两个问题其实比较好解决，但是比较绕。将 Future 与发送者关联起来形成新的结构体 FutureWrapper，将新的结构体发送到任务队列，这样执行器拿到的 Future 都是带有发送者的 FutureWrapper。
+     *
+     * 在 rust 的 waker 的介绍中，有这么一段描述：
+     * 每个 Future 在注册其 wake 函数时，可以将自身的信息存储在 Waker 中。当 wake 被调用时，Future 的自身信息会被传递给执行器，从而使执行器能够正确识别并调度特定的 Future。
+     *
+     * 这一段描述的就是将 Future 与发送者关联，并结合 Waker 的过程。因此，刚开始这句话并不是特别准确：
+     * > wake 注册就是将 wake 传递给外部，用 wake 关联当前 Future 的过程，而让外部调用 wake 函数就是在让执行器再次 poll wake 关联的 Future 的过程。
+     *
+     * 修改消息通道发送的数据类型，构建发送者和接收者(执行器)：
+     * ```rust
+     * // 通过同步消息通道模拟 Executor 调度流程
+     * struct FutureChannel(Spawner, Executor);
+     * impl FutureChannel {
+     *     fn new(size: usize) -> Self {
+     *         let (tx, rx) = mpsc::sync_channel(size);
+     *         Self(Spawner { task_sender: tx }, Executor { task_queue: rx })
+     *     }
+     * }
+     *
+     * struct FutureWrapper {
+     *     future: Mutex<Option<BoxFuture<'static, ()>>>,
+     *     task_sender: SyncSender<Arc<FutureWrapper>>,
+     * }
+     *
+     * #[derive(Clone)]
+     * struct Spawner {
+     *     task_sender: SyncSender<Arc<FutureWrapper>>, // 发送 FutureWrapper
+     * }
+     * impl Spawner {
+     *     fn spawn(&self, future: impl Future<Output = ()> + 'static + Send) {
+     *         let future = future.boxed();
+     *         let wrapper = FutureWrapper {
+     *             future: Mutex::new(Some(future)),
+     *             task_sender: self.task_sender.clone(),
+     *         };
+     *         // 将 Future 发送到任务通道中
+     *         self.task_sender
+     *             .send(Arc::new(wrapper))
+     *             .expect("任务队列已满");
+     *     }
+     * }
+     *
+     * struct Executor {
+     *     task_queue: Receiver<Arc<FutureWrapper>>,
+     * }
+     * impl Executor {
+     *     fn run(&self) {
+     *         // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
+     *         while let Ok(wrapper) = self.task_queue.recv() {
+     *             let mut mutex_future = wrapper.future.lock().unwrap();
+     *
+     *             if mutex_future.as_mut().poll(cx).is_pending() {
+     *                 // Future 未完成时，将 Future 再次放入任务队列中
+     *                 wrapper.task_sender.send(wrapper.clone());
+     *             };
+     *         }
+     *     }
+     * }
+     * ```
+     * Executor 中已经可以拿到发送者，并将携带 Future 的 FutureWrapper 重新发送到任务队列，剩下一个问题，如何统一到调用 wake 将 Future 放入任务队列，它能使用在两方面：
+     * - 在 poll 函数内部调用 wake，将 Future 重新放入任务队列
+     * - 在 执行器中调用 wake，外部调用也能将 Future 放入任务队列
+     *
+     * SimpleFuture 的 wake 和 Future 的 Context 都属于唤起作用，即将 Future 重新放入消息通道中，不同的是 Context 携带了数据。
+     * 其实，Waker 和 wake 函数并不是高深的魔法，Waker 是存储信息对象，wake 函数是一个触发操作，功能是将 Future 重新发送到消息队列中，阻塞等待的 Executor 就会接收并自动执行 Future。
+     * 
+     * 现在任务队列的数据类型变为 `FutureWrapper`，它携带了 Future 和发送者，如果再让他实现一个操作 wake，利用自身的发送者将自身的 Future 发送到消息通道中，那么问题就可以解决了。
+     * 
      * TODO 继续完成 MyWaker 实现
      * 定义一个 MyWaker，它能存储 Future 信息，并且在调用 wake 函数时，能将存储 Future 发送到消息通道：
      * ```rust
      * struct MyWeaker {}
      * ```
-     *
-     *
+     * 
      * 目前已经提前把 Future 与 wake 。
-     * Future 注册到 Waker 需要 Waker 存储 Future 自身的信息，这样才能保证执行器正确识别并 poll 指定的 Future。
      * 现在可以看成是 Waker 与 Executor 的交互可以使 Executor 不停的 poll Future。
-     *
-     * 一个任务准备好执行时（第 1 次被 poll，第 N+1 次主动触发 poll），它会将自己放入消息通道中，然后等待执行器 poll。
-     *
+     * 
+     * ArcWaker 简化了这个实现过程
+     * 虽然发送者和接收者是生成消息通道时产生的，但是这并不意味发送者和接收者不能进入消息通道，创建消息通道其实是创建了三个数据结构，发送者、接收者、消息通道。
      *
      */
 
@@ -597,32 +662,40 @@ fn main() {
             Self(Spawner { task_sender: tx }, Executor { task_queue: rx })
         }
     }
+
+    struct FutureWrapper {
+        future: Mutex<Option<BoxFuture<'static, ()>>>,
+        task_sender: SyncSender<Arc<FutureWrapper>>,
+    }
     #[derive(Clone)]
     struct Spawner {
-        task_sender: SyncSender<Arc<Mutex<BoxFuture<'static, ()>>>>,
+        task_sender: SyncSender<Arc<FutureWrapper>>, // 发送 FutureWrapper
     }
     impl Spawner {
         fn spawn(&self, future: impl Future<Output = ()> + 'static + Send) {
             let future = future.boxed();
+            let wrapper = FutureWrapper {
+                future: Mutex::new(Some(future)),
+                task_sender: self.task_sender.clone(),
+            };
             // 将 Future 发送到任务通道中
             self.task_sender
-                .send(Arc::new(Mutex::new(future)))
+                .send(Arc::new(wrapper))
                 .expect("任务队列已满");
         }
     }
     struct Executor {
-        // 一个Future一般只会在一个线程中执行，不需要 Mutex，但是编译器无法知道`Future`只会在一个线程内被修改，并不会被跨线程修改。
-        // 因此需要使用`Mutex`来满足编译器对线程安全的校验，如果是生产级的执行器实现，不会使用`Mutex`，因为会带来性能上的开销，取而代之的是使用`UnsafeCell`
-        task_queue: Receiver<Arc<Mutex<BoxFuture<'static, ()>>>>,
+        task_queue: Receiver<Arc<FutureWrapper>>,
     }
     impl Executor {
         fn run(&self) {
             // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
-            while let Ok(future) = self.task_queue.recv() {
-                let mut mutex_future = future.lock().unwrap();
+            while let Ok(wrapper) = self.task_queue.recv() {
+                let mut mutex_future = wrapper.future.lock().unwrap();
 
                 if mutex_future.as_mut().poll(cx).is_pending() {
-                    // 重新放回任务队列
+                    // Future 未完成时，将 Future 再次放入任务队列中
+                    wrapper.task_sender.send(wrapper.clone());
                 };
             }
         }
