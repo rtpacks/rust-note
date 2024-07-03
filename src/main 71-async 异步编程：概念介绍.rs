@@ -218,6 +218,8 @@ fn main() {
      * }
      * rt.block_on(cook());
      * ```
+     * 
+     * 注意：async 里面没有 await，那么 async 没有任何意义。只不过async这个整体作为一个future，但是在 async 内部运行时是不会产生任何调度的。
      *
      */
 
