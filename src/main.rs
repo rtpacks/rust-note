@@ -4,11 +4,16 @@ use std::{
         mpsc::{self, Receiver, SyncSender},
         Arc, Mutex,
     },
+    task::Context,
     thread,
     time::Duration,
 };
 
-use futures::{future::BoxFuture, task, Future, FutureExt};
+use futures::{
+    future::BoxFuture,
+    task::{self, ArcWake},
+    Future, FutureExt,
+};
 
 fn main() {
     /*
@@ -476,11 +481,13 @@ fn main() {
      *         // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
      *         while let Ok(wrapper) = self.task_queue.recv() {
      *             let mut mutex_future = wrapper.future.lock().unwrap();
-     *
-     *             if mutex_future.as_mut().poll(cx).is_pending() {
-     *                 // Future 未完成时，将 Future 再次放入任务队列中
-     *                 wrapper.task_sender.send(wrapper.clone());
-     *             };
+     *             if let Some(mut future) = mutex_future.take() {
+     *                 if future.as_mut().poll(cx).is_pending() {
+     *                     // Future 未完成时，将 Future 再次放入任务队列中
+     *                     wrapper.task_sender.send(wrapper.clone());
+     *                 };
+     * 
+     *             }
      *         }
      *     }
      * }
@@ -491,21 +498,83 @@ fn main() {
      *
      * SimpleFuture 的 wake 和 Future 的 Context 都属于唤起作用，即将 Future 重新放入消息通道中，不同的是 Context 携带了数据。
      * 其实，Waker 和 wake 函数并不是高深的魔法，Waker 是存储信息对象，wake 函数是一个触发操作，功能是将 Future 重新发送到消息队列中，阻塞等待的 Executor 就会接收并自动执行 Future。
-     * 
-     * 现在任务队列的数据类型变为 `FutureWrapper`，它携带了 Future 和发送者，如果再让他实现一个操作 wake，利用自身的发送者将自身的 Future 发送到消息通道中，那么问题就可以解决了。
-     * 
-     * TODO 继续完成 MyWaker 实现
-     * 定义一个 MyWaker，它能存储 Future 信息，并且在调用 wake 函数时，能将存储 Future 发送到消息通道：
-     * ```rust
-     * struct MyWeaker {}
-     * ```
-     * 
-     * 目前已经提前把 Future 与 wake 。
-     * 现在可以看成是 Waker 与 Executor 的交互可以使 Executor 不停的 poll Future。
-     * 
-     * ArcWaker 简化了这个实现过程
-     * 虽然发送者和接收者是生成消息通道时产生的，但是这并不意味发送者和接收者不能进入消息通道，创建消息通道其实是创建了三个数据结构，发送者、接收者、消息通道。
      *
+     * > 注意：虽然发送者和接收者是生成消息通道时产生的，但是这并不意味发送者和接收者不能进入消息通道，创建消息通道其实是创建了三个数据结构，发送者、接收者、消息通道。
+     *
+     * 现在任务队列的数据类型变为 `FutureWrapper`，它携带了 Future 和发送者，如果再让他实现一个操作 wake，利用自身的发送者将自身的 Future 发送到消息通道中，那么问题就可以解决了。
+     *
+     * 定义一个 MyWaker 特征，提供 wake 方法，能将自身重新发送到任务队列中：
+     * ```rust
+     * trait MyWaker {
+     *     fn wake(self: &Arc<Self>);
+     * }
+     *
+     * impl MyWaker for FutureWrapper {
+     *     fn wake(self: &Arc<Self>) {
+     *         // 利用自己的发送者，将自己重新发送到任务队列中
+     *         let cloned = self.clone();
+     *         self.task_sender.send(cloned).expect("任务队列已满")
+     *     }
+     * }
+     *
+     * impl Executor {
+     *     fn run(&self) {
+     *         // Executor 作为消息通道的接收者，可以从消息通道中取出需要被 poll 的 Future
+     *         while let Ok(wrapper) = self.task_queue.recv() {
+     *             let mut mutex_future = wrapper.future.lock().unwrap();
+     *             if let Some(mut future) = mutex_future.take() {
+     *                 if future.as_mut().poll(cx).is_pending() {
+     *                     // Future 未完成时，将 Future 再次放入任务队列中
+     *                     // wrapper.task_sender.send(wrapper.clone());
+     *                     // MyWaker::wake(&wrapper)
+     *                     wrapper.wake();
+     *                 };
+     * 
+     *             }
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * 现在可以看成是 Waker 与 Executor 的交互可以使 Executor 不停的 poll Future。虽然 poll 包含 waker 的 Context 参数还未完全生成，但整体的触发和实现都体现了。
+     * 生成完整的 Context 包含许多细节，这里利用 futures 提供的 ArcWaker 简化搭建简单可用的执行器这个过程。
+     *
+     * ```rust
+     * struct FutureWrapper {
+     *     future: Mutex<Option<BoxFuture<'static, ()>>>,
+     *     task_sender: SyncSender<Arc<FutureWrapper>>,
+     * }
+     *
+     * impl ArcWake for FutureWrapper {
+     *     // arc_self 参数形式，FutureWrapper 的实例是无法直接调用的，需要参数为 self 才允许
+     *     fn wake_by_ref(arc_self: &Arc<Self>) {
+     *         let cloned = arc_self.clone();
+     *         arc_self.task_sender.send(cloned).expect("任务队列已满")
+     *     }
+     * }
+     *
+     * #[derive(Clone)]
+     * struct Spawner {
+     *     task_sender: SyncSender<Arc<FutureWrapper>>, // 发送 FutureWrapper
+     * }
+     * impl Spawner {
+     *     fn spawn(&self, future: impl Future<Output = ()> + 'static + Send) {
+     *         let future = future.boxed();
+     *         let wrapper = FutureWrapper {
+     *             future: Mutex::new(Some(future)),
+     *             task_sender: self.task_sender.clone(),
+     *         };
+     *         // 将 Future 发送到任务通道中
+     *         self.task_sender
+     *             .send(Arc::new(wrapper))
+     *             .expect("任务队列已满");
+     *     }
+     * }
+     * ```
+     *
+     *
+     *
+     * TODO 为 FutureWrapper 实现 ArcWake 特征，最终实现 Context 和 wake 的调用
      */
 
     enum Poll<T> {
@@ -667,6 +736,26 @@ fn main() {
         future: Mutex<Option<BoxFuture<'static, ()>>>,
         task_sender: SyncSender<Arc<FutureWrapper>>,
     }
+    // 实现简单的 waker
+    // trait MyWaker {
+    //     fn wake(self: &Arc<Self>);
+    // }
+    // impl MyWaker for FutureWrapper {
+    //     fn wake(self: &Arc<Self>) {
+    //         // 利用自己的发送者，将自己重新发送到任务队列中
+    //         let cloned = self.clone();
+    //         self.task_sender.send(cloned).expect("任务队列已满")
+    //     }
+    // }
+
+    impl ArcWake for FutureWrapper {
+        // arc_self 参数形式，FutureWrapper 的实例是无法直接调用的，需要参数为 self 才允许
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            let cloned = arc_self.clone();
+            arc_self.task_sender.send(cloned).expect("任务队列已满")
+        }
+    }
+
     #[derive(Clone)]
     struct Spawner {
         task_sender: SyncSender<Arc<FutureWrapper>>, // 发送 FutureWrapper
@@ -684,6 +773,7 @@ fn main() {
                 .expect("任务队列已满");
         }
     }
+
     struct Executor {
         task_queue: Receiver<Arc<FutureWrapper>>,
     }
@@ -693,13 +783,20 @@ fn main() {
             while let Ok(wrapper) = self.task_queue.recv() {
                 let mut mutex_future = wrapper.future.lock().unwrap();
 
-                if mutex_future.as_mut().poll(cx).is_pending() {
-                    // Future 未完成时，将 Future 再次放入任务队列中
-                    wrapper.task_sender.send(wrapper.clone());
-                };
+                if let Some(mut future) = mutex_future.take() {
+                    // 生成关联的 waker
+                    let waker = futures::task::waker_ref(&wrapper);
+                    // 生成对应的 Context
+                    let context = &mut Context::from_waker(&*waker);
+
+                    // `BoxFuture<T>`是`Pin<Box<dyn Future<Output = T> + Send + 'static>>`的类型别名
+                    // 通过调用`as_mut`方法，可以将上面的类型转换成`Pin<&mut dyn Future + Send + 'static>`
+                    if future.as_mut().poll(context).is_pending() {
+                        // Future 未完成时，将 Future 再次放入任务队列中
+                        // wrapper.task_sender.send(wrapper.clone());
+                    };
+                }
             }
         }
     }
-
-    // 测试
 }
