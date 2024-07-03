@@ -217,6 +217,8 @@ async fn cook() {
 rt.block_on(cook());
 ```
 
+注意：async 里面没有 await，那么 async 没有任何意义。只不过 async 这个整体作为一个 future，但是在 async 内部运行时是不会产生任何调度的。
+
 ### Code
 
 ```rust
