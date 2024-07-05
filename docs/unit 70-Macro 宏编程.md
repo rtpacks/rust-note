@@ -4,8 +4,8 @@
 
 ### 宏和函数的区别
 
-https://course.rs/advance/macro.html#%E5%AE%8F%E5%92%8C%E5%87%BD%E6%95%B0%E7%9A%84%E5%8C%BA%E5%88%AB
+https://course.rs/advance/macro.html#宏和函数的区别
 
 ### others
 
-暂时不学习，等有需求时再阅读：https://course.rs/advance/macro.html#macro-%E5%AE%8F%E7%BC%96%E7%A8%8B
+暂时不学习，等有需求时再阅读：https://course.rs/advance/macro.html#macro-宏编程
