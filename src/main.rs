@@ -1,4 +1,12 @@
-use std::{marker::PhantomPinned, pin::Pin};
+use std::{
+    marker::PhantomPinned,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
+
+use futures::Future;
 
 fn main() {
     /*
@@ -94,7 +102,7 @@ fn main() {
      * - 如果 Pin 的是 !Unpin 类型，则无法被移动走，因为 !Unpin 就表示移动是不安全的，Pin 在 Safe Rust 中没有提供获取可变引用的方法
      *
      * 记住 Pin 规则：
-     * - Pin 代理一个值的引用，如 `Pin<Box<T>>` 和 `Pin<T>` 就是不同的代理引用。通过 Pin 去操作原始数据的行为都会收到 Pin 的管制，在使用上非常类似 newtype，仅提供部分或不提供代理操作。如果直接操作原始数据，那么 Pin 的管制不会生效
+     * - Pin 代理一个值的引用，如 `Pin<Box<T>>` 和 `Pin<T>` 就是不同的代理引用。通过 Pin 去操作原始数据的行为都会受到 Pin 的管制，在使用上非常类似 newtype，仅提供部分或不提供代理操作。如果直接操作原始数据，那么 Pin 的管制不会生效
      * - Pin 固定 `!Unpin` 特征的类型关键就在禁止其被修改移动，被固定也就无法被修改移动，也就是无法在 Safe Rust 的情况下拿到 `Pin<impl !Unpin>` 类型的可变引用，确保内存安全
      * - Pin 只限制 `!Unpin` 不可移动，如果一个结构体类型实现了 `!Unpin`，同时具有 `Unpin` 属性，那么 `Unpin` 属性是可以安全移动的，即该属性的值在 Safe Rust 中是可以修改的
      * - Pin 做的事情就是制定一个编译器规则，在使用自引用类型的时候给予帮助/提示，并禁止在 Safe Rust 中编写异常的代码，如禁止移动实现了 `!Unpin` 特征的数据类型。如果非要在 unsafe 中做可能发生异常的动作，那么 Pin 将没有任何作用
@@ -263,6 +271,7 @@ fn main() {
      * 这也很容易解释，如果结构体某个属性 A 实现了 Unpin，那么它是移动安全的，另外一个属性 B 存储该地址，访问的是固定地址，A 地址的内容修改后，只是改地址指向的内容发生了变化，但是地址是不变的。
      * 所以，Pin 对 `!Unpin` 才会有限制作用。
      *
+     * 因为 Test 是 !Unpin 的，无法通过 Pin 改变其代理引用指向的值的地址，取消注释任意一种交换都会编译不通过。
      * ```rust
      * let mut test1 = Test::new("test1");
      * let mut test2 = Test::new("test2");
@@ -284,7 +293,14 @@ fn main() {
      *     println!("{}, {}", t.a, *t.b);
      * }
      * ```
-     * 
+     *
+     * #### Pin 契约
+     * Pin 提供了一个 unsafe 的 get_unchecked_mut 函数，不管类型有没有实现 Unpin，都可以通过调用这个方法拿到 `&mut T`。
+     * 但是使用这个方法需要遵守 Pin 的契约，否则很容易出现问题！
+     * 对于 `Pin<P<T>>`,
+     * - 如果 `P<T>` 符合 Unpin，那 `P<T>` 从被 Pin 包裹到被销毁，都要一直保证 `P<T>` 不被钉住
+     * - 如果 `P<T>` 符合 !Unpin，那 `P<T>` 从被 Pin 包裹到被销毁，都要一直保证 `P<T>` 被钉住
+     *
      * ### 标记特征
      *
      * 如果将 Unpin 和 !Unpin 与之前的 Send/Sync 进行对比，会发现它们都很像：
@@ -294,22 +310,77 @@ fn main() {
      *
      * ### 为什么 Pin 可以解决非安全移动问题
      * 非安全移动的类型会发生问题的原因就在于被移动了。回顾 Pin 的作用，**`Pin` 表示固定一个值的地址**，它可以接收实现 `Unpin` 或 `!Unpin` 特征的类型。
-     * 也就是 Pin 固定值、不让值移动的行为，从概念的角度上看，已经解决了非安全移动的问题。接下来简单的看一下实现方式是如何解决这个问题的。
-     *
      * Pin 的作用就是保证在 Safe Rust 中被其包裹的指针所指向的值在内存中的位置不变，Pin 防止其包裹指针所指向的内容不会变的实现很简单，即不能获取其包裹指针的可变引用。
      *
      * 所以 Pin 做的事情就是制定一个编译器规则，在使用自引用类型的时候给予帮助/提示，并禁止在 Safe Rust 中编写异常的代码，如禁止移动实现了 `!Unpin` 特征的数据类型。
      * 如果非要在 unsafe 中修改，那么 Pin 没有任何作用。
      *
+     * Pin 是怎么在 Safe Rust 中防止外部拿到可变引用的？
+     * Pin 代理一个值的引用，如 `Pin<Box<T>>` 和 `Pin<T>` 就是不同的代理引用。通过 Pin 去操作原始数据的行为都会受到 Pin 的管制，在使用上非常类似 newtype，仅提供部分或不提供代理操作。如果直接操作原始数据，那么 Pin 的管制不会生效
      *
-     * TODO Pin 是怎么在 Safe Rust 中防止外部拿到可变引用的
-     * 使用Pin后，并不意味着就不需要使用 unsafe 操作，Pin 只是将由于 `!Unpin` 在内存移动可能引发副作用的移动限制了，不会移动就不发生 `!Unpin` 的副作用。
-     * 至于在原内存空间修改值，还是需要 unsafe 操作获取被 Pin 包括的值，此时的 unsafe 代码是安全的，因为修改内部的值不会导致整体的内存地址发生变化
+     * 使用 Pin 后，并不意味着就不需要使用 unsafe 操作，Pin 只是将由于 `!Unpin` 在内存移动可能引发副作用的移动限制了，不会移动就不发生 `!Unpin` 的副作用。
+     * 至于在原内存空间修改值，还是需要 unsafe 操作获取被 Pin 包括的值，此时的 unsafe 代码是安全的，因为修改内部的值不会导致整体的内存地址发生变化。
+     * 这再次解释了 Pin 的限制范围：Pin 只限制 `!Unpin` 不可移动，如果一个结构体类型实现了 `!Unpin`，同时具有 `Unpin` 属性，那么 `Unpin` 属性是可以安全移动的，即该属性的值在 Safe Rust 中是可以修改的。
+     *
      *
      * ### Future 为何需要 Pin
      * Future 为何需要 Pin？Future 可以是一个自引用结构体，Pin 可以解决自引用结构体的问题，自然也可以解决 Future 的自引用问题。
      *
-     * TODO 为什么 Future 是一个自引用结构体？
+     * 为什么 Future 是一个自引用结构体？
+     * 在【async 异步编程：Future 特征与任务调度】中，Future poll 函数的参数 self 就是一个 `Pin<&mut Self>` 类型，这是为了避免在参数中引用了非安全移动的数据类型，即避免 self 是一个实现了 `!Unpin` 特征的数据类型。
+     *
+     * ```rust
+     * struct SharedState {
+     *     // 异步任务是否已经结束（线程休眠是否已经结束）
+     *     completed: bool,
+     *     _pin: PhantomPinned,
+     * }
+     * struct TimeFuture {
+     *     shared_state: Arc<Mutex<SharedState>>,
+     * }
+     * impl Future for TimeFuture {
+     *     type Output = ();
+     *     fn poll(
+     *         self: Pin<&mut Self>,
+     *         cx: &mut std::task::Context<'_>,
+     *     ) -> std::task::Poll<Self::Output> {
+     *         // 不是在多线程中环境中，不需要额外的 _shared_state，避免形成死锁
+     *         // let _shared_state = Arc::clone(&self.shared_state);
+     *         let mut shared_state = self.shared_state.lock().unwrap();
+     *         println!("poll future");
+     *
+     *         if shared_state.completed {
+     *             println!("poll completed");
+     *             std::task::Poll::Ready(())
+     *         } else {
+     *             // 异步任务逻辑，假设已经结束，需要修改自身的状态，并且调用 wake
+     *             // 由于 self 的 SharedState 是一个实现了 !Unpin 的数据类型，被 Pin 管制后不能进行移动
+     *             // 但是 Pin 只对实现了 !Unpin 的类型有限制作用，对实现了 Unpin 的类型没有限制作用
+     *             // 所以即使整体是 `!Unpin` 的，也可以修改 Unpin 的属性
+     *             shared_state.completed = true;
+     *             cx.waker().clone().wake();
+     *             println!("poll pending");
+     *             std::task::Poll::Pending
+     *         }
+     *     }
+     * }
+     *
+     * futures::executor::block_on(TimeFuture {
+     *     shared_state: Arc::new(Mutex::new(SharedState {
+     *         completed: false,
+     *         _pin: PhantomPinned,
+     *     })),
+     * });
+     * ```
+     *
+     * 即使 SharedState 是一个实现了 `!Unpin` 特征的非移动安全的类型，但是通过 Pin `self: Pin<&mut Self>` 的管制，整体是不能移动的，这样就能保证内存安全。
+     *
+     *
+     *
+     *
+     * async/.await 是 Rust 内置的语言特性，可以用类似同步的方式去编写异步的代码，这一点与 JavaScript 非常像。
+     * 并且与 JavaScript 中 async/await 是 Promise + Generator 的优化语法糖类似，rust 的 async 也可以看成是 Future 的语法糖，rust 在编译时将 async 生成 Future，所以 async 是零开销的。
+     *
      *
      *
      * ### 参考阅读
@@ -477,4 +548,65 @@ fn main() {
     // std::mem::swap(&mut *test1, &mut *test2);
     // std::mem::swap(test1.as_mut().get_mut(), test2.as_mut().get_mut());
     println!("a: {}, b: {}", test2.as_ref().a(), test2.as_ref().b());
+
+    struct SharedState {
+        completed: bool,
+        pointer: *mut bool,
+        _pin: PhantomPinned,
+    }
+    struct TimeFuture {
+        shared_state: Arc<Mutex<SharedState>>,
+    }
+    impl TimeFuture {
+        fn new() -> Self {
+            // 取引用是safe操作，只有解引用才是unsafe的
+            let mut shared_state = SharedState {
+                completed: false,
+                pointer: std::ptr::null_mut(),
+                _pin: PhantomPinned,
+            };
+            shared_state.pointer = &mut shared_state.completed;
+
+            println!("new: p = {:p}", shared_state.pointer);
+            Self {
+                shared_state: Arc::new(Mutex::new(shared_state)),
+            }
+        }
+    }
+    impl Future for TimeFuture {
+        type Output = ();
+        fn poll(
+            self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            // 不是在多线程中环境中，不需要额外的 _shared_state，避免形成死锁
+            // let _shared_state = Arc::clone(&self.shared_state);
+            let mut shared_state = self.shared_state.lock().unwrap();
+
+            unsafe {
+                println!(
+                    "poll future, p = {:p}, completed = {:p}, *pointer = {}",
+                    shared_state.pointer, &shared_state.completed, *shared_state.pointer
+                );
+            }
+
+            if shared_state.completed {
+                println!("poll Ready");
+                std::task::Poll::Ready(())
+            } else {
+                // 异步任务逻辑，假设已经结束，需要修改自身的状态，并且调用 wake
+                // 由于 self 的 SharedState 是一个实现了 !Unpin 的数据类型，被 Pin 管制后不能进行移动
+                // 但是 Pin 只对实现了 !Unpin 的类型有限制作用，对实现了 Unpin 的类型没有限制作用
+                // 所以即使整体是 `!Unpin` 的，也可以修改 Unpin 的属性
+                unsafe {
+                    *(shared_state.pointer) = true;
+                }
+                cx.waker().clone().wake();
+                println!("poll Pending");
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    futures::executor::block_on(TimeFuture::new());
 }
