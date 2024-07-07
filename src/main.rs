@@ -24,6 +24,8 @@ fn main() {
      *
      * 以上过程只是一个简述，详细内容在底层探秘中已经被深入讲解过，因此这里不再赘述。
      *
+     * 注意：一个函数如果用 async 标识，但是 async 里面没有 poll Future 的流程，包括 await，那么 async 没有任何意义。只不过 async 这个整体作为一个 future，但是在 async 内部运行时是不会产生任何调度的。
+     *
      * ### async 的生命周期
      * async fn 函数返回的 Future 的生命周期会受到 Future 所使用变量的生命周期的限制，如使用引用类型的变量。
      *
@@ -76,10 +78,52 @@ fn main() {
      *     borrow_x(x).await
      * }
      * ```
-     * 
+     *
      * 以上就是使用 async 和 `fn() -> impl Future<Output = T>` 两种语法的区别，新的 Future 正好与标注返回的 Future 类型保持了一致。。
      *
+     * ### async move
+     * async 允许像闭包那样使用 move 关键字来将环境中变量的**所有权转移**到语句块内，好处是不需要考虑如何解决借用生命周期的问题，坏处是无法与其它代码实现对变量的共享。
+     * 
+     * ```rust
+     * // 多个不同的 `async` 语句块可以访问同一个本地变量，只要它们在该变量的作用域内执行
+     * async fn blocks() {
+     *     let string = String::from("Hello World");
+     *     let future1 = async {
+     *         println!("{string}");
+     *     };
+     *     let future2 = async {
+     *         println!("{string}");
+     *     };
+     *     // 运行两个 Future 直到完成
+     *     futures::join!(future1, future2);
+     * }
+     * futures::executor::block_on(blocks());
+     * 
+     * 
+     * // 由于 `async move` 会捕获环境中的变量，因此只有一个 `async move` 语句块可以访问该变量，
+     * // 但是它也有非常明显的好处：变量可以转移到返回的 Future 中，不再受借用生命周期的限制
+     * fn move_block() -> impl futures::Future<Output = ()> {
+     *     let my_string = "foo".to_string();
+     *     async move {
+     *         // ...
+     *         println!("{my_string}");
+     *     }
+     * }
+     * futures::executor::block_on(move_block());
+     * ```
      *
+     * ### await 和多线程执行器
+     * Future 并不只是在一个线程上运行的，当使用多线程 Future 执行器( executor )时，Future 内部的任何 .await 都可能导致它被切换到一个新线程上去执行。
+     * 因此 Future 可能会在线程间被移动，async 语句块中的变量必须要能在线程间传递。
+     * 
+     * 由于需要在多线程环境使用，意味着 Rc、 RefCell、没有实现 Send 的所有权类型、没有实现 Sync 的引用类型，它们在多线程环境中都是不安全的，因此无法被使用。
+     * 当然，实际上它们还是有可能被使用的，只要在 .await 调用期间，它们没有在 await 调用的作用域范围内，不在作用域内就不会在线程池中移动，也就不会存在被多个线程访问导致数据竞争和其他线程安全问题。
+     * 
+     * 类似的原因，在 .await 时使用普通的锁也不安全，例如 Mutex。原因是它可能会导致线程池被锁：
+     * 当一个任务获取锁 A 后，若它将线程的控制权还给执行器，然后执行器又调度运行另一个任务，该任务也去尝试获取了锁 A ，结果当前线程会直接卡死，最终陷入死锁中。
+     * 因此，为了避免这种情况的发生，我们需要使用 futures 包下的锁 futures::lock 来替代 Mutex 完成任务。
+     * 
+     * 
      */
 
     // 目前处于稳定版本的 async fn 和 async {}
@@ -117,4 +161,30 @@ fn main() {
         let x = &5;
         borrow_x(x).await
     }
+
+    // 多个不同的 `async` 语句块可以访问同一个本地变量，只要它们在该变量的作用域内执行
+    async fn blocks() {
+        let string = String::from("Hello World");
+        let future1 = async {
+            println!("{string}");
+        };
+        let future2 = async {
+            println!("{string}");
+        };
+
+        // 运行两个 Future 直到完成
+        futures::join!(future1, future2);
+    }
+    futures::executor::block_on(blocks());
+
+    // 由于 `async move` 会捕获环境中的变量，因此只有一个 `async move` 语句块可以访问该变量，
+    // 但是它也有非常明显的好处：变量可以转移到返回的 Future 中，不再受借用生命周期的限制
+    fn move_block() -> impl futures::Future<Output = ()> {
+        let my_string = "foo".to_string();
+        async move {
+            // ...
+            println!("{my_string}");
+        }
+    }
+    futures::executor::block_on(move_block());
 }
