@@ -130,6 +130,8 @@ fn main() {
      * Stream 特征类似于 Future 特征，但是前者在完成前可以生成多个值，这种行为跟标准库中的 Iterator 特征非常相似。
      * 也就是 Stream 在一次被 poll 的过程中，并不是只有 Ready 一种的结束状态，而是 Ready(Some(v)) 和 Ready(None) 形式的多种状态。当然 Pending 还是一种。
      *
+     * 参考阅读：https://juejin.cn/post/7217487697677156407
+     *
      * ```rust
      * trait Stream {
      *     // Stream 生成的值的类型
@@ -166,8 +168,59 @@ fn main() {
      *
      * futures::executor::block_on(send_recv());
      * ```
-     * 
-     * 
+     *
+     * Iterator 和 Stream 的区别：
+     * - Iterator 可以不断调用 next 方法，获得新的值，直到返回 None。Iterator 是**阻塞式**返回数据的，每次调用 next，必然独占 CPU 直到得到一个结果，而异步的 Stream 是**非阻塞**的，在等待的过程中会让出当前线程的控制权，空出 CPU 做其他事情。
+     * - Stream 的 poll_next 方法与 Future 的 poll 方法很像，并且和 Iterator 的 next 的作用类似。在使用中，poll_next 调用起来不方便，需要自己处理 Poll 状态，所以 Rust 提供了 StreamExt，作为 Stream 的扩展，提供了 next 方法，返回一个实现了 Future trait 的 Next 结构体，这样就可以直接通过 stream.next().await 来迭代一个 stream。
+     *
+     * > 注：StreamExt 是 StreamExtension 的简写。在 Rust 中，通常的做法是只在一个文件中放入最小定义（比如 Stream），且在另一个扩展的相关文件中放入额外的 api（比如 StreamExt）。
+     *
+     * > 注：Stream trait 还没有像 future 一样在 Rust 的核心库(std::core)中，它在 future_utils crate 中，而 StreamExtensions 也不在标准库中。这意味着，由于不同的库提供不同的导入，你可能会得到冲突的导入。例如，tokio 提供不同的 StreamExt 与 futures_utils。如果可以的话，尽量使用 futures_utils，因为它是 async/await 最常用的 crate.
+     *
+     *
+     * #### 迭代和并发
+     * 与迭代器类似，可以对一个 Stream 迭代。例如使用 map，filter，fold 方法，以及它们的遇到错误提前返回的版本： try_map，try_filter，try_fold。
+     * 但是跟迭代器又有所不同，for 循环无法迭代 Stream，但命令式风格的循环 while let 可以使用，同时还可以使用 next 和 try_next 方法:
+     *
+     * ```rust
+     * async fn stream_next() {
+     *     use futures::prelude::*;
+     *     let mut st = stream::iter(1..4)
+     *         .filter(|x| future::ready(x % 2 == 0))
+     *         .map(|x| x * x);
+     *
+     *     // 迭代
+     *     while let Some(x) = st.next().await {
+     *         println!("Got item: {}", x);
+     *     }
+     * }
+     * futures::executor::block_on(stream_next());
+     * ```
+     *
+     * 如果希望并发，可以使用 for_each_concurrrent 或者 try_for_each_concurrent 方法：
+     * ```rust
+     * async fn stream_next_concurrent() {
+     *     use futures::prelude::*;
+     *     let mut stream = stream::iter(1..10).filter(|x| future::ready(x % 2 == 0));
+     *
+     *     async fn report_n_jumps(num: i32) -> Result<(), std::io::Error> {
+     *         println!("report_n_jumps : {}", num);
+     *         Ok(())
+     *     }
+     *
+     *     // 迭代
+     *     stream
+     *         .for_each_concurrent(2, |x| async move {
+     *             println!("stream_next_concurrent: {}", x);
+     *             report_n_jumps(x).await;
+     *         })
+     *         .await;
+     * }
+     * futures::executor::block_on(stream_next_concurrent());
+     * ```
+     *
+     * ### 更多阅读
+     * - https://juejin.cn/post/7217487697677156407
      */
 
     // 目前处于稳定版本的 async fn 和 async {}
@@ -234,7 +287,6 @@ fn main() {
 
     async fn send_recv() {
         let (mut tx, mut rx) = mpsc::channel(100);
-
         let result = tx.send(1).await;
         let result = tx.send(2).await;
 
@@ -248,6 +300,72 @@ fn main() {
         let option = rx.next().await;
         println!("{}", option.unwrap());
     }
-
     futures::executor::block_on(send_recv());
+
+    async fn send_recv_next() {
+        use futures::stream::StreamExt; // 单独使用 Stream 时，需要引入 next
+        let (mut tx, mut rx) = mpsc::channel(100);
+        let result = tx.send(1).await;
+        let result = tx.send(2).await;
+
+        // 清除发送者，避免无法释放
+        drop(tx);
+
+        // `StreamExt::next` 类似于 `Iterator::next`, 但是前者返回的不是值，而是一个 `Future<Output = Option<T>>`，
+        // 因此还需要使用`.await`来获取具体的值
+        while let Some(item) = rx.next().await {
+            println!("send_recv_next {}", item);
+        }
+    }
+    futures::executor::block_on(send_recv_next());
+
+    async fn send_recv_try_next() {
+        use futures::stream::TryStreamExt; // 单独使用 Stream 时，需要引入 try_next
+        let (mut tx, mut rx) = mpsc::channel(100);
+
+        let result = tx.send(1).await;
+        let result = tx.send(2).await;
+
+        // 清除发送者，避免无法释放
+        drop(tx);
+
+        // `StreamExt::next` 类似于 `Iterator::next`, 但是前者返回的不是值，而是一个 `Future<Output = Option<T>>`，
+        // 因此还需要使用`.await`来获取具体的值
+        while let Some(item) = rx.try_next().unwrap() {
+            println!("send_recv_try_next {}", item);
+        }
+    }
+    futures::executor::block_on(send_recv_try_next());
+
+    async fn stream_next() {
+        use futures::prelude::*;
+        let mut st = stream::iter(1..4)
+            .filter(|x| future::ready(x % 2 == 0))
+            .map(|x| x * x);
+
+        // 迭代
+        while let Some(x) = st.next().await {
+            println!("Got item: {}", x);
+        }
+    }
+    futures::executor::block_on(stream_next());
+
+    async fn stream_next_concurrent() {
+        use futures::prelude::*;
+        let mut stream = stream::iter(1..10).filter(|x| future::ready(x % 2 == 0));
+
+        async fn report_n_jumps(num: i32) -> Result<(), std::io::Error> {
+            println!("report_n_jumps : {}", num);
+            Ok(())
+        }
+
+        // 迭代
+        stream
+            .for_each_concurrent(2, |x| async move {
+                println!("stream_next_concurrent: {}", x);
+                report_n_jumps(x).await;
+            })
+            .await;
+    }
+    futures::executor::block_on(stream_next_concurrent());
 }
