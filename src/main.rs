@@ -1,3 +1,5 @@
+use futures::{channel::mpsc, SinkExt, StreamExt};
+
 fn main() {
     /*
      *
@@ -83,7 +85,7 @@ fn main() {
      *
      * ### async move
      * async 允许像闭包那样使用 move 关键字来将环境中变量的**所有权转移**到语句块内，好处是不需要考虑如何解决借用生命周期的问题，坏处是无法与其它代码实现对变量的共享。
-     * 
+     *
      * ```rust
      * // 多个不同的 `async` 语句块可以访问同一个本地变量，只要它们在该变量的作用域内执行
      * async fn blocks() {
@@ -98,8 +100,8 @@ fn main() {
      *     futures::join!(future1, future2);
      * }
      * futures::executor::block_on(blocks());
-     * 
-     * 
+     *
+     *
      * // 由于 `async move` 会捕获环境中的变量，因此只有一个 `async move` 语句块可以访问该变量，
      * // 但是它也有非常明显的好处：变量可以转移到返回的 Future 中，不再受借用生命周期的限制
      * fn move_block() -> impl futures::Future<Output = ()> {
@@ -115,13 +117,55 @@ fn main() {
      * ### await 和多线程执行器
      * Future 并不只是在一个线程上运行的，当使用多线程 Future 执行器( executor )时，Future 内部的任何 .await 都可能导致它被切换到一个新线程上去执行。
      * 因此 Future 可能会在线程间被移动，async 语句块中的变量必须要能在线程间传递。
-     * 
+     *
      * 由于需要在多线程环境使用，意味着 Rc、 RefCell、没有实现 Send 的所有权类型、没有实现 Sync 的引用类型，它们在多线程环境中都是不安全的，因此无法被使用。
      * 当然，实际上它们还是有可能被使用的，只要在 .await 调用期间，它们没有在 await 调用的作用域范围内，不在作用域内就不会在线程池中移动，也就不会存在被多个线程访问导致数据竞争和其他线程安全问题。
-     * 
+     *
      * 类似的原因，在 .await 时使用普通的锁也不安全，例如 Mutex。原因是它可能会导致线程池被锁：
      * 当一个任务获取锁 A 后，若它将线程的控制权还给执行器，然后执行器又调度运行另一个任务，该任务也去尝试获取了锁 A ，结果当前线程会直接卡死，最终陷入死锁中。
      * 因此，为了避免这种情况的发生，我们需要使用 futures 包下的锁 futures::lock 来替代 Mutex 完成任务。
+     *
+     *
+     * ### Stream 流处理
+     * Stream 特征类似于 Future 特征，但是前者在完成前可以生成多个值，这种行为跟标准库中的 Iterator 特征非常相似。
+     * 也就是 Stream 在一次被 poll 的过程中，并不是只有 Ready 一种的结束状态，而是 Ready(Some(v)) 和 Ready(None) 形式的多种状态。当然 Pending 还是一种。
+     *
+     * ```rust
+     * trait Stream {
+     *     // Stream 生成的值的类型
+     *     type Item;
+     *
+     *     // 尝试去解析 Stream 中的下一个值,
+     *     // 若无数据，返回`Poll::Pending`, 若有数据，返回 `Poll::Ready(Some(x))`, `Stream`完成则返回 `Poll::Ready(None)`
+     *     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>)
+     *         -> Poll<Option<Self::Item>>;
+     * }
+     * ```
+     *
+     * Stream 的一个常见例子是消息通道（ futures 包中的）的消费者 Receiver。
+     * 每次有消息从 Send 端发送后，它都可以接收到一个 Some(val) 值，一旦 Send 端关闭( drop )，且消息通道中没有消息后，它会接收到一个 None 值。
+     * 不得不说，rust 这块的设计的非常灵活且巧妙。
+     *
+     * ```rust
+     * async fn send_recv() {
+     *     let (mut tx, mut rx) = mpsc::channel(100);
+     *
+     *     let result = tx.send(1).await;
+     *     let result = tx.send(2).await;
+     *
+     *     // 清除发送者，避免无法释放
+     *     drop(tx);
+     *
+     *     // `StreamExt::next` 类似于 `Iterator::next`, 但是前者返回的不是值，而是一个 `Future<Output = Option<T>>`，
+     *     // 因此还需要使用`.await`来获取具体的值
+     *     let option = rx.next().await;
+     *     println!("{}", option.unwrap());
+     *     let option = rx.next().await;
+     *     println!("{}", option.unwrap());
+     * }
+     *
+     * futures::executor::block_on(send_recv());
+     * ```
      * 
      * 
      */
@@ -187,4 +231,23 @@ fn main() {
         }
     }
     futures::executor::block_on(move_block());
+
+    async fn send_recv() {
+        let (mut tx, mut rx) = mpsc::channel(100);
+
+        let result = tx.send(1).await;
+        let result = tx.send(2).await;
+
+        // 清除发送者，避免无法释放
+        drop(tx);
+
+        // `StreamExt::next` 类似于 `Iterator::next`, 但是前者返回的不是值，而是一个 `Future<Output = Option<T>>`，
+        // 因此还需要使用`.await`来获取具体的值
+        let option = rx.next().await;
+        println!("{}", option.unwrap());
+        let option = rx.next().await;
+        println!("{}", option.unwrap());
+    }
+
+    futures::executor::block_on(send_recv());
 }
