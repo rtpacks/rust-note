@@ -223,6 +223,8 @@ async fn stream_next_concurrent() {
 futures::executor::block_on(stream_next_concurrent());
 ```
 
+Stream 可以通过以上几种方法转换为 Future。
+
 ### 更多阅读
 
 - https://juejin.cn/post/7217487697677156407
