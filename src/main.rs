@@ -192,16 +192,76 @@ fn main() {
      * select! 使用 Pin 就是为了使 Future 在轮询过程中保持固定的位置，确保 Future 不会在内存中被移动，保证内存安全。
      *
      * #### default 和 complete
-     * // TODO 完成 default 分支和 complete 分支，解释为什么 default 分支有些时候不执行
      * 除了给定 Future 分支外，select! 还支持两个特殊的分支：default 和 complete：
      * - default 分支，若没有任何 Future 或 Stream 处于 Ready 状态， 则该分支会被立即执行
      * - complete 分支当所有的 Future 和 Stream 完成后才会被执行，它往往配合 loop 使用，loop 用于循环完成所有的 Future
-     * 
-     * 其中 default 分支比较特殊，是 select! 执行时，按照给定的分支顺序
      *
+     * 其中 default 分支比较特殊，一个 select! 宏，default 分支可能重复执行，也可能不执行：
+     * - 当 select! 执行时，按照给定的分支顺序并发执行 Future，如果给定的 Future 都不处于 Poll::Ready 状态（Poll::Pending），则 default 分支会被执行。理论上 select! 内部每次轮询时如果给定的 Future 都返回 Poll::Pending，那么 default 可以无限次执行
+     * - 除了可以重复执行的特性外，default 分支在部分场景下无法被运行。因为 default 分支运行的条件是给定的所有分支都不处于 Poll::Ready 状态，只要有一个分支在运行 default 分支前处于 Poll::Ready，那么 default 分支就不能被运行
+     *
+     * select! 宏虽然会并发运行给定的 Future，但是最终只会调用第一个完成的 Future 分支，然后主动结束 select! 代码块。这意味着即使后续有已完成的分支也不会被调用。
+     *
+     * ```rust
+     * async fn select_default() {
+     *     let mut a_fut = future::ready(4);
+     *     let mut b_fut = future::ready(6);
+     *     let mut total = 0;
+     *
+     *     select! {
+     *         default => {
+     *             // 因为所有的 Future 分支初始化都是 Poll:Ready 状态，所以 default 分支不会被执行
+     *             println!("default branch");
+     *         },
+     *         a = a_fut => {
+     *             println!("a_fut, total = {}, total + a = {}", total, total + a);
+     *             total += a;
+     *         },
+     *         b = b_fut => {
+     *             println!("b_fut, total = {}, total + b = {}", total, total +b);
+     *             total += b;
+     *         },
+     *     };
+     * }
+     * futures::executor::block_on(select_default());
+     * ```
+     *
+     * complete 分支运行的条件是所有的 Future 分支都完成（返回 Poll::Ready），但 select! 在第一个 Future 完成后就主动结束 select! 代码块。
+     * 因此，为了获取所有的 Future 状态，complete 常常与循环搭配使用。
+     * 同时，上一次 select! 结束时的 Future 分支（返回 Poll::Ready），为避免副作用，不应该再被 poll 执行，所以 complete 需要搭配 FusedFuture，表示已经结束。
+     * 最后，当 complete 分支执行时，需要注意结束外层的循环。
+     *
+     * ```rust
+     * async fn select_complete() {
+     *     let mut a_fut = future::ready(4);
+     *     let mut b_fut = future::ready(6);
+     *     let mut total = 0;
+     *
+     *     loop {
+     *         select! {
+     *             a = a_fut => {
+     *                 println!("a_fut, total = {}, total + a = {}", total, total + a);
+     *                 total += a;
+     *             },
+     *             b = b_fut => {
+     *                 println!("b_fut, total = {}, total + b = {}", total, total +b);
+     *                 total += b;
+     *             },
+     *             default => {
+     *                 println!("default branch");
+     *             },
+     *             complete => {
+     *                 println!("complete branch");
+     *                 break; // 需要主动结束外层的循环
+     *             }
+     *         };
+     *     }
+     * }
+     * futures::executor::block_on(select_complete());
+     * ```
      *
      * ### select 循环并发
-     * 
+     *
      * Promise 有一个非常好用的属性 thenable，它支持在 promise 结束后又返回一个类似 promise 的数据，当前的 promise 后续的 then 方法就会以返回的 promise 状态为准。
      * rust 的 Future 也有类似的逻辑，
      */
@@ -264,13 +324,35 @@ fn main() {
                 if fut1.is_terminated() {
                     println!("fut1.is_terminated")
                 }
-            }
+            },
         }
         println!("select3");
     }
     futures::executor::block_on(select3());
 
-    async fn select_loop() {
+    async fn select_default() {
+        let mut a_fut = future::ready(4);
+        let mut b_fut = future::ready(6);
+        let mut total = 0;
+
+        select! {
+            default => {
+                // 因为所有的 Future 分支初始化都是 Poll:Ready 状态，所以 default 分支不会被执行
+                println!("default branch");
+            },
+            a = a_fut => {
+                println!("a_fut, total = {}, total + a = {}", total, total + a);
+                total += a;
+            },
+            b = b_fut => {
+                println!("b_fut, total = {}, total + b = {}", total, total +b);
+                total += b;
+            },
+        };
+    }
+    futures::executor::block_on(select_default());
+
+    async fn select_complete() {
         let mut a_fut = future::ready(4);
         let mut b_fut = future::ready(6);
         let mut total = 0;
@@ -285,10 +367,15 @@ fn main() {
                     println!("b_fut, total = {}, total + b = {}", total, total +b);
                     total += b;
                 },
-                complete => break,
-                default => panic!(), // 该分支永远不会运行，因为 `Future` 会先运行，然后是 `complete`
+                default => {
+                    println!("default branch");
+                },
+                complete => {
+                    println!("complete branch");
+                    break; // 需要主动结束外层的循环
+                }
             };
         }
     }
-    futures::executor::block_on(select_loop());
+    futures::executor::block_on(select_complete());
 }
