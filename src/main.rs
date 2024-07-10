@@ -1,4 +1,7 @@
-use futures::{future, join, pin_mut, select, try_join, TryFutureExt};
+use futures::{
+    future::{self, FusedFuture},
+    join, pin_mut, select, try_join, TryFutureExt,
+};
 
 fn main() {
     /*
@@ -79,13 +82,70 @@ fn main() {
      *
      *     pin_mut!(fut1, fut2);
      *     select! {
-     *         () = fut1 => {},
-     *         () = fut2 => {}
+     *         () = fut1 => {
+     *             if fut1.is_terminated() {
+     *                 println!("fut1.is_terminated")
+     *             }
+     *         },
+     *         () = fut2 => {
+     *             if fut1.is_terminated() {
+     *                 println!("fut1.is_terminated")
+     *             }
+     *         }
      *     }
      *     println!("select3");
      * }
      * futures::executor::block_on(select3());
      * ```
+     *
+     * select! 的完整实现比较复杂，以下 GPT 给出一个简化的 select! 实现以帮助理解：
+     * ```rust
+     * macro_rules! select {
+     *     (
+     *         $( $name:ident = $future:expr => $code:block ),*,
+     *         complete => $complete:block,
+     *         default => $default:block
+     *     ) => {{
+     *         use std::pin::Pin;
+     *         use std::task::{Context, Poll, Waker};
+     *         use futures::future::FutureExt;
+     *
+     *         let mut futures = ($(Pin::new(&$future.fuse())),*);
+     *         let waker = futures::task::noop_waker();
+     *         let mut cx = Context::from_waker(&waker);
+     *
+     *         loop {
+     *             let mut all_ready = true;
+     *             $(
+     *                 if futures.$name.is_terminated() {
+     *                     // Future already terminated, skip it
+     *                     continue;
+     *                 }
+     *                 if let Poll::Pending = futures.$name.poll(&mut cx) {
+     *                     all_ready = false;
+     *                 } else {
+     *                     // Future is ready, execute the associated code block
+     *                     { $code }
+     *                     break;
+     *                 }
+     *             )*
+     *
+     *             if all_ready {
+     *                 // All futures are ready, execute the complete block
+     *                 { $complete }
+     *                 break;
+     *             } else {
+     *                 // None of the futures are ready, execute the default block
+     *                 { $default }
+     *             }
+     *         }
+     *     }};
+     * }
+     * ```
+     *
+     * select! 通过一个循环来轮询每个 Future，如果一个 Future 返回 Poll::Ready，执行相应的代码块并退出循环。
+     * 如果所有的 Future 都返回 Poll::Pending，执行默认的代码块即 default 分支。
+     * 如果所有的 Future 都返回 Poll::Ready，则会执行 complete 分支。
      *
      * 在使用 select! 时，还需要为 Future 添加两道保障：`fuse()` 和 `pin_mut!`。
      *
@@ -97,22 +157,51 @@ fn main() {
      * - 逻辑错误：如果一个已经完成的 Future 被再次轮询并返回 Poll::Ready，可能会导致程序逻辑错误，比如返回 Ready 的逻辑只能执行一次，反复轮询可能使 Ready 逻辑多次执行，导致错误数据的产生
      *
      * 因为原生 Future trait 并不直接提供一种机制来判断 Future 是否已经**终止**（终止代表不允许再次 Poll 该 Future）。
-     * 所以需要额外的机制来保证已经完成（成功或失败）的 Future 不再被 poll，futures 库提供了 FusedFuture trait。
+     * 所以需要额外的机制来保证已经完成（成功或失败）的 Future 不再被 poll，futures 库提供了 FusedFuture trait 来完成这个功能。
      * FusedFuture 特征通过增加 is_terminated 方法，提供了一种明确的方式来检查 Future 是否已经完成。
      *
-     * // TODO 完成 select! 为什么需要 FusedFuture 和 Pin
-     *
-     *
      * 使用 FusedFuture 特征的优势：
-     * - 已经完成的 Future 不再被轮询，可以提高异步操作的效率，避免无意义的计算。
+     * - 提高效率：已经完成的 Future 不再被轮询，可以提高异步操作的效率，避免无意义的计算
+     * - 防止重复轮询：当一个 Future 完成后，当FusedFuture 来检查 Future 是否已经完成并防止它被再次轮询
      *
+     * #### pin_mut!
      *
+     * select! 需要同时轮询多个 Future，这些 Future 可能在不同的时间点完成。
+     * 为了避免避免潜在的内存安全问题（如【unit 73-async 异步编程：Pin 和 Unpin】介绍的 Future 自引用问题），需要确保这些 Future 在整个异步操作过程中保持固定位置，此时用到 pin_mut! 辅助。
+     *
+     * ```rust
+     * use futures::FutureExt;
+     * let fut1 = select1().fuse();
+     * let fut2 = select2().fuse();
+     *
+     * pin_mut!(fut1, fut2);
+     * select! {
+     *     () = fut1 => {
+     *         if fut1.is_terminated() {
+     *             println!("fut1.is_terminated")
+     *         }
+     *     },
+     *     () = fut2 => {
+     *         if fut1.is_terminated() {
+     *             println!("fut1.is_terminated")
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * select! 使用 Pin 就是为了使 Future 在轮询过程中保持固定的位置，确保 Future 不会在内存中被移动，保证内存安全。
      *
      * #### default 和 complete
-     * default 分支是 select! 执行时，按照给定的分支顺序
+     * // TODO 完成 default 分支和 complete 分支，解释为什么 default 分支有些时候不执行
+     * 除了给定 Future 分支外，select! 还支持两个特殊的分支：default 和 complete：
+     * - default 分支，若没有任何 Future 或 Stream 处于 Ready 状态， 则该分支会被立即执行
+     * - complete 分支当所有的 Future 和 Stream 完成后才会被执行，它往往配合 loop 使用，loop 用于循环完成所有的 Future
+     * 
+     * 其中 default 分支比较特殊，是 select! 执行时，按照给定的分支顺序
      *
      *
-     * ### unknown
+     * ### select 循环并发
+     * 
      * Promise 有一个非常好用的属性 thenable，它支持在 promise 结束后又返回一个类似 promise 的数据，当前的 promise 后续的 then 方法就会以返回的 promise 状态为准。
      * rust 的 Future 也有类似的逻辑，
      */
@@ -166,8 +255,16 @@ fn main() {
 
         pin_mut!(fut1, fut2);
         select! {
-            () = fut1 => {},
-            () = fut2 => {}
+            () = fut1 => {
+                if fut1.is_terminated() {
+                    println!("fut1.is_terminated")
+                }
+            },
+            () = fut2 => {
+                if fut1.is_terminated() {
+                    println!("fut1.is_terminated")
+                }
+            }
         }
         println!("select3");
     }
