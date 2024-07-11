@@ -1,257 +1,124 @@
-use std::{pin::Pin, rc::Rc};
-
-use futures::{executor, Future};
-use tokio::runtime::{Builder, Runtime};
+use std::{
+    io::{BufRead, BufReader},
+    net,
+};
 
 fn main() {
     /*
      *
-     * ## async 异步编程：一些疑难问题
-     * async 在 Rust 中属于比较新的概念，因此存在一些解决方案不完善的地方。
+     * ## 实战：单线程 Web 服务器
+     * 构建所需的网络协议: HTTP 和 TCP。这两种协议都是请求-应答模式的网络协议，意味着在客户端发起请求后，服务器会监听并处理进入的请求，最后给予应答，至于这个过程怎么进行，取决于具体的协议定义。
+     * 与 HTTP 有所不同， TCP 是一个底层协议，它仅描述客户端传递了信息给服务器，至于这个信息长什么样，怎么解析处理，则不在该协议的职责范畴内。
+     * HTTP 协议是更高层的通信协议，一般来说都基于 TCP 来构建 (HTTP/3 是基于 UDP 构建的协议)，更高层的协议也意味着它会对传输的信息进行解析处理。
      *
-     * ### async 语句块使用 ?
-     * async 语句块和 async fn 最大的区别就是 async 语句块无法显式的声明返回值，当配合 `?`（错误传播）一起使用时就会有类型错误。
-     * 原因在于编译器无法推断出 `Result<T, E>` 中的 E 的类型。
-     *
-     * 有些时候编译器还会提示 consider giving `fut` a type，这个也不需要尝试，因为目前还没有办法为 async 语句块指定返回类型。
-     * ```rust
-     * async fn foo() -> Result<i32, String> {
-     *     Ok(1)
-     * }
-     * async fn bar() -> Result<i32, String> {
-     *     Ok(2)
-     * }
-     * let async_block = async {
-     *     // the `?` operator can only be used in an async block that returns `Result` or `Option` (or another type that implements `FromResidual`)
-     *     //  `?` 必须要在返回 Result 和 Option 的代码块中使用
-     *     let foo = foo().await?;
-     *     let bar = bar().await?;
-     *     println!("async_block exec, foo = {}, bar = {}", foo, bar);
-     *     // Ok(()) 编译器目前无法推断错误类型，需要手动指定类型，例如下一行使用 turbofish 声明错误类型
-     *     Ok::<_, String>(())
-     * };
-     * executor::block_on(async_block);
-     * ```
-     *
-     * ### async 函数和 Send 特征
-     * 在多线程中，Send 和 Sync 是绕不开的两个标记特征，要在多线程中安全的使用变量，就必须使用 Send 或 Sync：
-     * - 实现 Send 的类型可以在线程间安全地传递所有权
-     * - 实现 Sync 的类型可以在线程间安全地共享引用
-     *
-     * 由于 rust async/await 的调度，Future 可能运行在不同的线程上，由于多线程需要保证数据的所有权和引用的正确性。
-     * 所以当处于多线程时 Future 需要关注 **.await 运行过程中**，传递给 Future 作用域的变量类型是否是 Send。
-     *
-     * 在单线程上，不需要实现 Send 也可以正常运行，使用 `futures::executor::block_on` 构建单线程运行环境：
-     * ```rust
-     * // !Send 特征
-     * #[derive(Default)]
-     * struct NotSend(Rc<()>);
-     *
-     * async fn foo(x: NotSend) {
-     *     println!("{:?}", x.0);
-     * }
-     * async fn bar() {
-     *     let x = NotSend::default();
-     *     foo(x).await;
-     * }
-     * executor::block_on(bar());
-     * ```
-     *
-     * 使用 tokio 构建多线程运行环境，运行携带实现 `!Send` 特征的数据类型：
-     * ```rust
-     * // !Send 特征
-     * async fn foo(x: Rc<i32>) {
-     *     println!("{:?}", x);
-     * }
-     * async fn bar() {
-     *     let x = Rc::new(2);
-     *     foo(x).await;
-     * }
-     * // !Send 特征不满足多线程运行的要求，编译报错
-     * let rt = Runtime::new().unwrap();
-     * let handle = rt.spawn(bar());
-     * rt.block_on(handle);
-     * ```
-     *
-     * 如果 await 在不涉及非 `!Send` 的情况下 rust 编译器报错，可以利用代码块将 `!Send` 类型包裹起来，这个规则可以帮助解决很多借用冲突问题，特别是在 NLL 出来之前。
-     *
-     * ### async 与递归
-     * 递归涉及到动态大小类型（不定长类型 DST），它的大小只有到了**程序运行时**才能动态获知。
-     * rust 编译器不允许直接使用动态大小类型，在之前的章节【unit 49-不定长类型 DST 和定长类型 Sized】与【智能指针（二）Box 对象分配】中处理不定长类型的方式就是将其转换成定长类型，如将特征转换成特征对象。
-     *
-     * > 关键点回忆1：
-     * >
-     * > 不能简单的将变量与类型视为只是一块栈内存或一块堆内存数据，比如 Vec 类型，rust将其分成两部分数据：存储在堆中的实际类型数据与存储在栈上的管理信息数据。
-     * > 其中存储在栈上的管理信息数据是引用类型，包含实际类型数据的地址、元素的数量，分配的空间等信息，**rust 通过栈上的管理信息数据掌控实际类型数据的信息**。
-     * > 这种**存储自身大小信息的类型**就可以称为定长类型（固定尺寸）。
-     *
-     *
-     * > 关键点回忆2：
-     * >
-     * > 特征是一种动态尺寸类型（Dynamically Sized Types，DST），即特征本身不具有固定的大小，因此不能直接实例化为对象。
-     * > 在Rust中，特征通常通过指针（如 `Box<T>、&T`）来使用，这些指针指向实现了该特征的具体类型的实例。
-     * > 这些**对动态尺寸类型的一种封装，使其可以通过具体的、已知大小的指针类型（如 `Box<dyn Trait>` 或 `&dyn Trait`）来使用，这种封装类型就是一个特征对象**。因此特征对象可以被视为具体的、已知大小的类型。
-     * > 在这里需要更新前几章的描述：特征对象是动态尺寸类型，这是有误的。正确的认识是：特征是动态尺寸类型，而特征对象是对特征的一种封装，使特征可以通过具体的，已知大小的指针类型来描述，因此特征对象是一个定长类型（Sized）。
-     *
-     * 在内部实现中，async fn 被编译成一个 Future 状态机，在递归中使用 async fn 会将流程变得更为复杂，因为编译后的状态机还需要包含自身。
-     * 这是典型的动态大小类型，它的大小会无限增长，因此编译器会直接报错。
-     * ```rust
-     * // foo函数:
-     * async fn foo() {
-     *     step_one().await;
-     *     step_two().await;
-     * }
-     *
-     * // 会被编译成类似下面的类型：
-     * enum Foo {
-     *     First(StepOne),
-     *     Second(StepTwo),
-     * }
-     *
-     * // 因此 recursive 函数
-     * async fn recursive() {
-     *     recursive().await;
-     *     recursive().await;
-     * }
-     *
-     * // 会生成类似以下的类型
-     * enum Recursive {
-     *     First(Recursive),
-     *     Second(Recursive),
-     * }
-     * ```
-     *
-     * 之前将递归不定长类型变为定长类型是通过 box 智能指针来实现的，但是在递归中不能使用 box 来实现。
-     *
-     * 编译器会将 async fn 编译为一个匿名的类型，该类型实现了 Future。当尝试直接使用 Box::pin 包裹一个 async fn 时，会遇到编译器的限制，主要是因为生命周期和自引用的问题。
-     *
-     * 在 rust 1.79 中，简单的递归已经可以直接使用 Box::pin，但是建议还是通过将递归逻辑提取到一个**普通函数**中，并返回一个 `Box<dyn Future<Output = T> + Send>` 解决问题。
+     * 使用 std::net 模块监听进入的请求连接，IP 和端口是 127.0.0.1:7878。
      *
      * ```rust
-     * // 将递归逻辑抽离到普通函数，显式的返回 `Box<dyn Future<Output = T> + Send>` 类型
-     * fn fibonacci_impl(n: u32) -> Pin<Box<dyn Future<Output = u64> + Send>> {
-     *     Box::pin(async move {
-     *         match n {
-     *             0 => 0,
-     *             1 => 1,
-     *             _ => {
-     *                 let a = fibonacci_impl(n - 1).await;
-     *                 let b = fibonacci_impl(n - 1).await;
-     *                 a + b
-     *             }
-     *         }
-     *     })
+     * let listener = net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+     * for stream in listener.incoming() {
+     *     let stream = stream.unwrap();
+     *     println!("Connection established!");
      * }
-     * async fn fibonacci() {
-     *     let res = fibonacci_impl(4).await;
-     *     println!("{res}");
-     * }
-     * executor::block_on(fibonacci());
+     * ```
+     * TcpListener start error! 修改为正确的语句
+     * bind 非常类似 new 操作符，它生成一个 TcpListener 实例。之所以不用 new，是因为一般都说 "绑定到某个端口"，因此 bind 这个名称会更合适。
+     * 生成并绑定到指定的端口是可能失败的，比如给定的地址是错误的、端口已经被绑定等。
+     *
+     * `listener.incoming` 返回**请求建立连接的 TcpStream**，请求连接的操作是有可能失败的，比如超出最大的连接数，所以需要使用 Result 包裹。
+     * 注意：这个时候 for 迭代的是请求建立连接的 TcpStream，并不是已经建立的连接。
+     *
+     * cargo run 运行后，浏览器访问 `127.0.0.1:7878`，控制台可能会输出多条 `Connection established!`：
+     * ```shell
+     * Connection established!
+     * Connection established!
+     * Connection established!
      * ```
      *
-     * ### async 与 trait
+     * 这是因为 stream 完成连接建立后，因为 for 单次循环的结束导致 stream 被 drop，所以连接断开，又因为浏览器有连接重试的特性，所以控制台可能会输出多条 `Connection established!`。
      *
-     * 从 1.75 版本开始，rust 支持在 trait 中定义 async 异步函数，不再需要通过 async-trait 库来支持。具体来看，trait async 分为两种：
-     * - 有代价 async trait
-     * - 无代价的 async trait
-     * https://blog.csdn.net/qq_54714089/article/details/137723868
+     * 由于 listener.incoming 是阻塞式监听，所以 main 线程会被阻塞，最后需要通过 `ctrl + c` 来结束程序进程。
+     *
+     * ### 解析请求报文
+     * 在请求连接建立后，需要解析客户端发送的数据，并给出对应的响应，这次请求才算是完整的。现在先看如何获取客户端发送的报文。
+     * 
+     * TcpStream 返回的是字节流，这里使用 BufReader 读取报文，并使用给定的迭代器简化实现读取逻辑：
+     * ```rust
+     * let listener =
+     *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+     * for stream in listener.incoming() {
+     *     let stream = stream.unwrap();
+     *     println!("Connection established!");
+     *
+     *     let buf_reader = BufReader::new(stream);
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines() // 迭代性适配器，不会消耗元素，是惰性的
+     *         .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+     *
+     *     println!("{:#?}", http_request);
+     * }
+     * ```
+     * // TODO lines 方法是一个迭代性适配器，作用是将字节流按照 `\r\n | \n` 分割，供后续迭代器使用
+     * // TODO map 是常用的迭代性适配器，在这里将 lines 方法分割的元素从 Result 中取出
+     * // TODO take_while 是一个迭代性适配器，它不同于 filter，take_while 具有终止作用，即无论给多少数据，只要遇到第一个 false 条件，take_while 就会终止
+     * // TODO collect 是最常用的消费性适配器，用于收集数据，需要在变量上提前标注收集类型，或者使用 turbofish collect::<Vec<_>>() 语法
+     * 
+     * // TODO 最终可以看到请求的报文，这就是常见的 http 请求报文，具体来看，它分为四部分：
+     * // TODO http 报文解释
+     *
+     * 控制台打印的报文，具体看代码区域：
+     * ```shell
+     *
+     * ```
+     *
+     *
      */
 
-    {
-        async fn foo() -> Result<i32, String> {
-            Ok(1)
-        }
-        async fn bar() -> Result<i32, String> {
-            Ok(2)
-        }
-        let async_block = async {
-            // the `?` operator can only be used in an async block that returns `Result` or `Option` (or another type that implements `FromResidual`)
-            // `?` 必须要在返回 Result 和 Option 的代码块中使用
-            let foo = foo().await?;
-            let bar = bar().await?;
-            println!("async_block exec, foo = {}, bar = {}", foo, bar);
-            // Ok(())
-            Ok::<_, String>(())
-        };
-        executor::block_on(async_block);
-    }
+    // {
+    //     let listener =
+    //         net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+    //     for stream in listener.incoming() {
+    //         let stream = stream.unwrap();
+    //         println!("Connection established!");
+    //     }
+    // }
 
     {
-        // !Send 类型
-        async fn foo(x: Rc<i32>) {
-            println!("{:?}", x);
-        }
-        async fn bar() {
-            let x = Rc::new(2);
-            foo(x).await;
-        }
-        executor::block_on(bar());
-    }
+        let listener =
+            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+        for stream in listener.incoming() {
+            let stream = stream.unwrap();
+            println!("Connection established!");
 
-    {
-        // !Send 类型
-        async fn foo(x: Rc<i32>) {
-            println!("{:?}", x);
-        }
-        async fn bar() {
-            let x = Rc::new(2);
-            foo(x).await;
-        }
-        let rt = Runtime::new().unwrap();
-        // !Send 特征不满足多线程运行的要求，编译报错
-        // let handle = rt.spawn(bar());
-        // rt.block_on(handle);
-    }
+            let buf_reader = BufReader::new(stream);
+            let http_request: Vec<_> = buf_reader
+                .lines() // 迭代性适配器，不会消耗元素，是惰性的
+                .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+                .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+                .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
 
-    {
-        async fn recursive_function(n: u32) {
-            if n == 0 {
-                println!("Reached the base case");
-                return;
-            }
-            println!("Current value: {}", n);
-            Box::pin(recursive_function(n - 1)).await;
-        }
-        executor::block_on(recursive_function(10));
+            println!("{:#?}", http_request);
 
-        async fn fibonacci(n: u32) -> u64 {
-            println!("Current n: {}", n);
-            match n {
-                0 => 0,
-                1 => 1,
-                _ => {
-                    let a = Box::pin(fibonacci(n - 1)).await;
-                    let b = Box::pin(fibonacci(n - 2)).await;
-                    a + b
-                }
-            }
+            // [
+            //     "GET / HTTP/1.1",
+            //     "Host: 127.0.0.1:7878",
+            //     "Connection: keep-alive",
+            //     "Cache-Control: max-age=0",
+            //     "sec-ch-ua: \"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Microsoft Edge\";v=\"126\"",
+            //     "sec-ch-ua-mobile: ?0",
+            //     "sec-ch-ua-platform: \"Windows\"",
+            //     "Upgrade-Insecure-Requests: 1",
+            //     "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+            //     "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            //     "Sec-Fetch-Site: none",
+            //     "Sec-Fetch-Mode: navigate",
+            //     "Sec-Fetch-User: ?1",
+            //     "Sec-Fetch-Dest: document",
+            //     "Accept-Encoding: gzip, deflate, br, zstd",
+            //     "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            //     "Cookie: _ga=GA1.1.89819984.1702807852; _ga_L7WEXVQCR9=GS1.1.1702807851.1.1.1702807915.0.0.0",
+            // ]
         }
-        async fn run() {
-            let res = fibonacci(4).await;
-            println!("{res}");
-        }
-        executor::block_on(run());
-    }
-
-    {
-        // 将递归逻辑抽离到普通函数，显式的返回 `Box<dyn Future<Output = T> + Send>` 类型
-        fn fibonacci_impl(n: u32) -> Pin<Box<dyn Future<Output = u64> + Send>> {
-            Box::pin(async move {
-                match n {
-                    0 => 0,
-                    1 => 1,
-                    _ => {
-                        let a = fibonacci_impl(n - 1).await;
-                        let b = fibonacci_impl(n - 1).await;
-                        a + b
-                    }
-                }
-            })
-        }
-        async fn fibonacci() {
-            let res = fibonacci_impl(4).await;
-            println!("{res}");
-        }
-        executor::block_on(fibonacci());
     }
 }
