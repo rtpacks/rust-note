@@ -1,5 +1,6 @@
 use std::{
-    io::{BufRead, BufReader},
+    fs,
+    io::{BufRead, BufReader, Write},
     net,
 };
 
@@ -38,10 +39,17 @@ fn main() {
      *
      * 由于 listener.incoming 是阻塞式监听，所以 main 线程会被阻塞，最后需要通过 `ctrl + c` 来结束程序进程。
      *
-     * ### 解析请求报文
-     * 在请求连接建立后，需要解析客户端发送的数据，并给出对应的响应，这次请求才算是完整的。现在先看如何获取客户端发送的报文。
-     * 
-     * TcpStream 返回的是字节流，这里使用 BufReader 读取报文，并使用给定的迭代器简化实现读取逻辑：
+     * ### 解析报文
+     * 在请求连接建立后，需要解析客户端发送的数据，并给出对应的响应，这次请求才算是完整的。
+     *
+     * > 阅读 HTTP 协议报文：
+     * > - https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Overview#http_报文
+     * > - https://cloud.tencent.com/developer/article/1953222
+     * > - https://web.archive.org/web/20240712035832/https://cloud.tencent.com/developer/article/1953222
+     * > 回车符 `\r`，换行符 `\n`
+     *
+     * #### 解析请求报文
+     * 现在先看如何获取客户端发送的报文。TcpStream 返回的是字节流，这里使用 BufReader 读取报文，并使用给定的迭代器简化实现读取逻辑：
      * ```rust
      * let listener =
      *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
@@ -59,30 +67,178 @@ fn main() {
      *     println!("{:#?}", http_request);
      * }
      * ```
-     * // TODO lines 方法是一个迭代性适配器，作用是将字节流按照 `\r\n | \n` 分割，供后续迭代器使用
-     * // TODO map 是常用的迭代性适配器，在这里将 lines 方法分割的元素从 Result 中取出
-     * // TODO take_while 是一个迭代性适配器，它不同于 filter，take_while 具有终止作用，即无论给多少数据，只要遇到第一个 false 条件，take_while 就会终止
-     * // TODO collect 是最常用的消费性适配器，用于收集数据，需要在变量上提前标注收集类型，或者使用 turbofish collect::<Vec<_>>() 语法
-     * 
-     * // TODO 最终可以看到请求的报文，这就是常见的 http 请求报文，具体来看，它分为四部分：
-     * // TODO http 报文解释
+     * > - 迭代器是 Rust 的 零成本抽象（zero-cost abstractions）之一，意味着抽象并不会引入运行时开销
+     * > - 迭代器分为消费性和迭代性适配器，消费性适配器（内部调用 next 方法）消耗元素，迭代性适配器返回一个迭代器
+     * > - 迭代器最终需要一个消费性适配器来收尾，最终将迭代器转换成一个具体的值
      *
-     * 控制台打印的报文，具体看代码区域：
+     * 各种迭代器的作用：
+     * - lines 是一个迭代性适配器，作用是将字节流按照 `\r\n | \n` 分割，供后续迭代器使用
+     * - map 是一个常用的迭代性适配器，在这里将 lines 方法分割的元素从 Result 中取出
+     * - take_while 是一个迭代性适配器，作用是过滤非空白的字符串。take_while 不同于 filter，它具有终止作用，即无论给多少数据，只要遇到第一个 false 条件，take_while 就会终止
+     * - collect 是最常用的消费性适配器，作用是收集数据，需要在变量上提前标注收集类型，或者使用 turbofish collect::<Vec<_>>() 语法
+     *
+     * 最终可以看到请求的报文，这就是常见的 http 请求报文。控制台打印的报文，具体看代码区域：
      * ```shell
-     *
+     * [
+     *     "GET / HTTP/1.1",
+     *     "Host: 127.0.0.1:7878",
+     *      ...
+     *     "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+     * ]
      * ```
      *
+     * 按照 **HTTP 协议**的定义，请求报文分为四部分，请求行、请求头、空行、请求体，其中请求体是可选的：
+     * ```shell
+     * Method Request-URI HTTP-Version CRLF
+     * headers CRLF
+     * CRLF
+     * message-body
+     * ```
+     * > 请求头部的最后会有一个空行，表示请求头部结束，接下来为请求正文，这一行非常重要，必不可少。
+     *
+     * 对比控制台输出的报文，由于使用 take_while 过滤了空行后的所有内容，所以输出的报文只有请求行和请求头：
+     * |      协议                       |       报文       |
+     * | -----------------------         | -------------   |
+     * | Method Request-URI HTTP-Version | GET / HTTP/1.1  |
+     * | Host: 127.0.0.1:7878            | headers         |
+     *
+     * #### 返回响应报文
+     * 与客户端发送的请求报文类似，服务器应该返回响应给客户端，HTTP 对响应报文也有定义。
+     * 具体来看，HTTP 响应报文由状态行、响应头部、空行、响应正文 4 部分组成，其中响应正文是可选的。
+     *
+     * ```shell
+     * HTTP-Version Status-Code Reason-Phrase CRLF
+     * headers CRLF
+     * CRLF
+     * message-body
+     * ```
+     * 应答的格式与请求相差不大，其中 Status-Code 是最重要的，它用于告诉客户端，当前的请求是否成功，若失败，大概是什么原因，它就是著名的 HTTP 状态码，常用的有 200: 请求成功，404 目标不存在，等等。
+     *
+     * 构造一个简单的 http 响应返回给浏览器，让浏览器认为连接正常完成，避免出现错误状态页面：
+     * ```rust
+     * let listener =
+     *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+     * for stream in listener.incoming() {
+     *     let mut stream = stream.unwrap();
+     *     println!("Connection established!");
+     *
+     *     let buf_reader = BufReader::new(&stream);
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines() // 迭代性适配器，不会消耗元素，是惰性的
+     *         .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+     *
+     *     println!("{:#?}", http_request);
+     *
+     *     let http_response = "HTTP/1.1 200 OK\r\n\r\n";
+     *
+     *     stream.write_all(http_response.as_bytes());
+     * }
+     * ```
+     * `"HTTP/1.1 200 OK\r\n\r\n"` 返回空的响应正文，现在增加字符串正文，让浏览器显式文字 `Hello World`。
+     * ```rust
+     * let http_response = "HTTP/1.1 200 OK\r\n\r\nHello World";
+     * ```
+     *
+     * 接着就能看到浏览器显式 `Hello World` 文字，查看接口返回响应是字符串 `Hello World`。
+     * 可以再尝试一下返回 JSON 数据，并且指定响应头 `Content-Type:application/json;`：
+     *
+     * ```rust
+     * let http_response = "HTTP/1.1 200 OK\r\nContent-Type:application/json;\r\n\r\n{ \"name\": \"Mr.F\", \"age\": 18 }";
+     * ```
+     *
+     * 这里的 stream.write_all 和 BufReader 一样使用的是字节流，所以需要使用 `as_bytes()` 将字符串转换为字节。
+     *
+     * ##### 返回 HTML
+     * 只返回字符串会有点粗糙，现代网页基本上都是由 HTML (骨架)、CSS (样式)、JavaScript (行为) 构成的。这里实现将本地的 HTML 返回给浏览器。
+     *
+     * ```rust
+     * let listener =
+     *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+     * for stream in listener.incoming() {
+     *     let mut stream = stream.unwrap();
+     *     println!("Connection established!");
+     *
+     *     let buf_reader = BufReader::new(&stream);
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines() // 迭代性适配器，不会消耗元素，是惰性的
+     *         .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+     *
+     *     println!("{:#?}", http_request);
+     *
+     *     let status_line = "HTTP/1.1 200 OK";
+     *     // 以项目根路径为标准
+     *     let html = fs::read_to_string(r"public/http-response.html").unwrap();
+     *     let response_head = format!(
+     *         "Content-Type:{}\r\nContent-Length:{}",
+     *         "text/html",
+     *         html.len()
+     *     );
+     *     let response_body = html;
+     *     let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+     *
+     *     stream.write_all(http_response.as_bytes());
+     * }
+     * ```
+     * web 框架(例如 rocket)将解析请求数据和返回应答数据都封装在 API 中，非常简单易用，无需开发者手动编写。
+     *
+     * ### 验证请求和选择性应答
+     * 以上所有的请求都会返回同一个响应，很明显这是不合理的，现在模拟不同的请求返回不同的响应。
+     * 规定只能返回根路径 `/`，访问其他路径返回 404 状态。
+     *
+     * ```rust
+     * let listener =
+     *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+     * for stream in listener.incoming() {
+     *     let mut stream = stream.unwrap();
+     *     println!("Connection established!");
+     *
+     *     let buf_reader = BufReader::new(&stream);
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines() // 迭代性适配器，不会消耗元素，是惰性的
+     *         .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+     *         .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+     *     println!("{:#?}", http_request);
+     *
+     *     let (status_line, html) = if http_request[0] == "GET / HTTP/1.1" {
+     *         (
+     *             "HTTP/1.1 200 OK",
+     *             fs::read_to_string(r"public/http-response-index.html").unwrap(),
+     *         )
+     *     } else {
+     *         (
+     *             "HTTP/1.1 404 NOT FOUND",
+     *             fs::read_to_string(r"public/http-response-404.html").unwrap(),
+     *         )
+     *     };
+     *
+     *     // 以项目根路径为标准
+     *     let response_head = format!(
+     *         "Content-Type:{}\r\nContent-Length:{}",
+     *         "text/html",
+     *         html.len()
+     *     );
+     *     let response_body = html;
+     *     let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+     *
+     *     stream.write_all(http_response.as_bytes());
+     * }
+     * ```
      *
      */
 
-    // {
-    //     let listener =
-    //         net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
-    //     for stream in listener.incoming() {
-    //         let stream = stream.unwrap();
-    //         println!("Connection established!");
-    //     }
-    // }
+    {
+        let listener =
+            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+        for stream in listener.incoming() {
+            let stream = stream.unwrap();
+            println!("Connection established!");
+        }
+    }
 
     {
         let listener =
@@ -117,8 +273,102 @@ fn main() {
             //     "Sec-Fetch-Dest: document",
             //     "Accept-Encoding: gzip, deflate, br, zstd",
             //     "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-            //     "Cookie: _ga=GA1.1.89819984.1702807852; _ga_L7WEXVQCR9=GS1.1.1702807851.1.1.1702807915.0.0.0",
             // ]
+        }
+    }
+
+    {
+        let listener =
+            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            println!("Connection established!");
+
+            let buf_reader = BufReader::new(&stream);
+            let http_request: Vec<_> = buf_reader
+                .lines() // 迭代性适配器，不会消耗元素，是惰性的
+                .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+                .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+                .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+
+            println!("{:#?}", http_request);
+
+            // let http_response = "HTTP/1.1 200 OK\r\n\r\n";
+            let http_response = "HTTP/1.1 200 OK\r\n\r\nHello World";
+            let http_response = "HTTP/1.1 200 OK\r\nContent-Type:application/json;\r\n\r\n{ \"name\": \"Mr.F\", \"age\": 18 }";
+
+            stream.write_all(http_response.as_bytes());
+        }
+    }
+
+    {
+        let listener =
+            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            println!("Connection established!");
+
+            let buf_reader = BufReader::new(&stream);
+            let http_request: Vec<_> = buf_reader
+                .lines() // 迭代性适配器，不会消耗元素，是惰性的
+                .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+                .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+                .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+
+            println!("{:#?}", http_request);
+
+            let status_line = "HTTP/1.1 200 OK";
+            // 以项目根路径为标准
+            let html = fs::read_to_string(r"public/http-response.html").unwrap();
+            let response_head = format!(
+                "Content-Type:{}\r\nContent-Length:{}",
+                "text/html",
+                html.len()
+            );
+            let response_body = html;
+            let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+
+            stream.write_all(http_response.as_bytes());
+        }
+    }
+
+    {
+        let listener =
+            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error!");
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            println!("Connection established!");
+
+            let buf_reader = BufReader::new(&stream);
+            let http_request: Vec<_> = buf_reader
+                .lines() // 迭代性适配器，不会消耗元素，是惰性的
+                .map(|line| line.unwrap()) // 迭代性适配器，不会消耗元素，是惰性的
+                .take_while(|line| !line.is_empty()) // 迭代性适配器，不会消耗元素，是惰性的
+                .collect(); // 消费性适配器，依赖迭代器的 next 函数，用于消费元素
+            println!("{:#?}", http_request);
+
+            let (status_line, html) = if http_request[0] == "GET / HTTP/1.1" {
+                (
+                    "HTTP/1.1 200 OK",
+                    fs::read_to_string(r"public/http-response-index.html").unwrap(),
+                )
+            } else {
+                (
+                    "HTTP/1.1 404 NOT FOUND",
+                    fs::read_to_string(r"public/http-response-404.html").unwrap(),
+                )
+            };
+
+            // 以项目根路径为标准
+            let response_head = format!(
+                "Content-Type:{}\r\nContent-Length:{}",
+                "text/html",
+                html.len()
+            );
+            let response_body = html;
+            let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+
+            stream.write_all(http_response.as_bytes());
         }
     }
 }
