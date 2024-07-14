@@ -130,6 +130,43 @@ fn main() {
      * ...
      * ```
      *
+     * > 为什么使用 new 而不是 build？
+     * > new 往往用于简单初始化一个实例，而 build 往往会完成更加复杂的构建工作。因此这里更适合使用 new 名称。
+     *
+     * 在 lib.rs 中声明线程池结构体和 new 方法，并导入使用：
+     * ```rust
+     * // lib.rs
+     * pub struct ThreadPool {}
+     *
+     * impl ThreadPool {
+     *     pub fn new(size: usize) -> Self {
+     *         ThreadPool {}
+     *     }
+     * }
+     * ```
+     *
+     * 以上的代码还少了一个步骤：当有任务到达时，线程池需要一个**方法**去调用线程执行任务。
+     * 类比多线程函数 `thread::spawn`，推测线程池提供的执行方法参数应该是一个闭包，闭包内部执行 `handle_request` 函数。
+     * ```rust
+     * fn execute(closure: F) {}
+     *
+     * pool.execute(|| { handle_request() });
+     * ```
+     *
+     * 其中 `execute` 函数的闭包参数类型可以参考 `thread::spawn` 函数的闭包声明：
+     * ```rust
+     * pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+     * where
+     *     F: FnOnce() -> T,
+     *     F: Send + 'static,
+     *     T: Send + 'static,
+     * {
+     *     Builder::new().spawn(f).expect("failed to spawn thread")
+     * }
+     * ```
+     * 
+     * 
+     *
      * TODO
      *
      */
@@ -250,6 +287,8 @@ fn main() {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
             println!("Connection established!");
+
+            pool.execute(|| handle_request(stream))
         }
     }
 }
