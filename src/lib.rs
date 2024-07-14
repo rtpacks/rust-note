@@ -243,3 +243,5 @@ pub fn search_case_insensitive_right<'a>(query: &'a str, content: &'a str) -> Ve
     }
     results
 }
+
+pub mod threadpool;

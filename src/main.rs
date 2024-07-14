@@ -5,6 +5,8 @@ use std::{
     time::Duration,
 };
 
+use ilearn::threadpool::ThreadPool;
+
 use futures::stream;
 
 fn main() {
@@ -124,9 +126,10 @@ fn main() {
      *
      * // 生成有 5 个线程的线程池
      * let pool = ThreadPool::new(5);
-     * 
+     *
      * ...
      * ```
+     *
      * TODO
      *
      */
