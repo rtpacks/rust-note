@@ -1,4 +1,13 @@
-pub struct ThreadPool {}
+use std::{
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
+use tokio::time::sleep;
+
+pub struct ThreadPool {
+    threads: Vec<JoinHandle<()>>,
+}
 
 impl ThreadPool {
     /// Create a new ThreadPool.
@@ -11,7 +20,23 @@ impl ThreadPool {
     pub fn new(size: usize) -> Self {
         assert!(size > 0);
 
-        ThreadPool {}
+        let mut threads = Vec::with_capacity(size);
+
+        for i in 0..size {
+            threads.push(thread::spawn(|| {
+                while true {
+                    // 为了减缓轮询的压力，控制轮询时间
+                    thread::sleep(Duration::from_secs(1));
+
+                    if (jobs.len() > 0) {
+                        let job = jobs.pop();
+                        job();
+                    }
+                }
+            }))
+        }
+
+        ThreadPool { threads }
     }
 
     pub fn execute<F>(&self, f: F)

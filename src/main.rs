@@ -163,11 +163,109 @@ fn main() {
      * {
      *     Builder::new().spawn(f).expect("failed to spawn thread")
      * }
-     * ```
-     * 
-     * 
      *
-     * TODO
+     * pub fn execute<F>(&self, f: F)
+     * where
+     *     // 泛型参数形式
+     *     // 泛型参数：编译时确定闭包类型，性能更好，无需动态分发。
+     *     // 特征对象：运行时确定闭包类型，灵活但有额外开销。
+     *     F: FnOnce() + Send + 'static,
+     * {
+     * }
+     * ```
+     *
+     * #### 存储线程
+     * 以上梳理了整体框架，现在考虑线程池怎么存储线程。`thread::spawn` 是创建线程的函数，观察该函数就可以得到线程的类型 `JoinHandle<T>`。
+     * ```rust
+     * pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+     * where
+     *     F: FnOnce() -> T,
+     *     F: Send + 'static,
+     *     T: Send + 'static,
+     * {
+     *     Builder::new().spawn(f).expect("failed to spawn thread")
+     * }
+     * ```
+     *
+     * 使用一个 `Vec<E>` 存储线程，在合适时取出线程让其执行任务。其中 `E` 是 `JoinHandle<T>`，T 在这个案例中为单元类型 `()`，即返回值为单元类型的线程。
+     *
+     * ```rust
+     * pub struct ThreadPool {
+     *     threads: Vec<JoinHandle<()>>,
+     * }
+     *
+     * impl ThreadPool {
+     *     /// Create a new ThreadPool.
+     *     ///
+     *     /// The size is the number of threads in the pool.
+     *     ///
+     *     /// ## Panics
+     *     ///
+     *     /// The `new` function will panic if the size is zero.
+     *     pub fn new(size: usize) -> Self {
+     *         assert!(size > 0);
+     *
+     *         let mut threads = Vec::with_capacity(size);
+     *         ThreadPool { threads }
+     *     }
+     *
+     *     pub fn execute<F>(&self, f: F)
+     *     where
+     *         // 泛型参数形式
+     *         // 泛型参数：编译时确定闭包类型，性能更好，无需动态分发。
+     *         // 特征对象：运行时确定闭包类型，灵活但有额外开销。
+     *         F: FnOnce() + Send + 'static,
+     *     {
+     *     }
+     * }
+     * ```
+     * 现在线程池已经可以存储线程，但是还剩下几个关键问题：
+     * 1. 在生成 `ThreadPool` 时没有生成线程，即没有调用 `thread::spawn` 函数，`ThreadPool::threads` 还是空的
+     * 2. `thread::spawn` 创建线程时是立即执行闭包的，直接传递给 `thread::spawn` 的闭包无法修改
+     * 3. 在主线程受到任务时，怎么将任务传递给线程池中的线程
+     *
+     * 问题 1 和问题 2 说明需要在生成线程池时需要一个“写死”的立即执行闭包。
+     * 问题 2 和 问题3 说明这个立即执行闭包要具有从主线程接收新任务的能力，它是带有循环的，当前任务执行完成后会等待新任务。
+     *
+     * 在生成线程时“写死”的立即执行闭包代码与立即执行闭包具有接收新任务的能力，两者的结合点在“写死”的代码具有从某处循环接收任务的逻辑，这样就能做到既“写死”又可动态接收。
+     *
+     * 生成线程时，让线程处于循环接收的状态中：
+     * ```rust
+     * pub fn new(size: usize) -> Self {
+     *     assert!(size > 0);
+     *
+     *     let mut threads = Vec::with_capacity(size);
+     *
+     *     for i in 0..size {
+     *         threads.push(thread::spawn(|| {
+     *             while true {
+     *                 // 为了减缓轮询的压力，控制轮询时间
+     *                 thread::sleep(Duration::from_secs(1));
+     *
+     *                 if (jobs.len() > 0) {
+     *                     let job = jobs.pop();
+     *                     job();
+     *                 }
+     *             }
+     *         }))
+     *     }
+     *
+     *     ThreadPool { threads }
+     * }
+     * ```
+     *
+     * 现在看起来是合理的，从一个 jobs 任务队列中获取任务，然后开始任务执行。当然在多线程的环境下需要考虑多线程所有权和多线程并发问题，即需要使用 `Arc` 和 `Mutex`。
+     *
+     * 轮询一个队列获取信息属于从共享内存中通信，在之前提到过：不要通过共享内存来通信，而是通过通信来共享内存，将轮询改成消息通道将一定程度上会降低代码的难度。
+     * 
+     * > 在 Go 语言中有一句很经典的话：
+     * > Do not communicate by sharing memory; instead, share memory by communicating
+     * > 不要通过共享内存来进行通信，而是通过通信来共享内存
+     * >
+     * > 简单理解：尽量避免访问同一块内存空间来通信，因为它会造成的并发问题如竞争条件（Race condition），死锁（Deadlocks）等。
+     * > 而是应该通过消息通知（触发）进行数据传递，例如消息队列、Socket 等方法。不同进程或线程之间通过这些通信机制共享数据，避免共享内存造成的并发问题。
+     * 
+     * TODO 将其转换成消息队列，
      *
      */
 
