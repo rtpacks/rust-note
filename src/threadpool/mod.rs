@@ -70,7 +70,7 @@ pub type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub struct Worker {
     id: usize,
-    thread: JoinHandle<()>,
+    thread: Option<JoinHandle<()>>,
 }
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
@@ -81,17 +81,28 @@ impl Worker {
         // 所以使用 `while let, for in` 这种方式还是类似单线程，同时运行的只有一个线程，因为接收者的锁没有正确的及时释放。
 
         let thread = thread::spawn(move || loop {
-            let job = receiver.lock().unwrap().recv();
-            println!("thread {id} got a job; executing.");
-            job.unwrap()();
+            let message = receiver.lock().unwrap().recv();
+            match message {
+                Ok(job) => {
+                    println!("thread {id} got a job; executing.");
+                    job();
+                }
+                Err(_) => {
+                    println!("thread {id} disconnected; shutting down.");
+                    break;
+                }
+            }
         });
-        Worker { id, thread }
+        Worker {
+            id,
+            thread: Some(thread),
+        }
     }
 }
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: Sender<Job>,
+    sender: Option<Sender<Job>>,
 }
 
 impl ThreadPool {
@@ -114,7 +125,10 @@ impl ThreadPool {
             workers.push(Worker::new(i, _receiver));
         }
 
-        ThreadPool { workers, sender }
+        ThreadPool {
+            workers,
+            sender: Some(sender),
+        }
     }
 
     pub fn execute<F>(&self, f: F)
@@ -126,6 +140,19 @@ impl ThreadPool {
     {
         // 传递特征对象，因为函要求定长类型，特征属于非定长的类型
         let box_f = Box::new(f);
-        self.sender.send(box_f);
+        self.sender.as_ref().unwrap().send(box_f);
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        for worker in &mut self.workers {
+            if let Some(thread) = worker.thread.take() {
+                println!("Shutting down worker {}", worker.id);
+                thread.join().unwrap();
+                println!("Shut down worker {}", worker.id);
+            }
+        }
     }
 }
