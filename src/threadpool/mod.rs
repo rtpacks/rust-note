@@ -1,12 +1,15 @@
 use std::{
+    sync::{
+        mpsc::{self, Sender},
+        Arc, Mutex,
+    },
     thread::{self, JoinHandle},
-    time::Duration,
 };
 
-use tokio::time::sleep;
-
+pub type Job = Box<dyn FnOnce() + Send + 'static>;
 pub struct ThreadPool {
     threads: Vec<JoinHandle<()>>,
+    sender: Sender<Job>,
 }
 
 impl ThreadPool {
@@ -21,22 +24,33 @@ impl ThreadPool {
         assert!(size > 0);
 
         let mut threads = Vec::with_capacity(size);
+        let (mut sender, mut receiver) = mpsc::channel::<Job>();
+        let receiver = Arc::new(Mutex::new(receiver));
 
         for i in 0..size {
-            threads.push(thread::spawn(|| {
-                while true {
-                    // 为了减缓轮询的压力，控制轮询时间
-                    thread::sleep(Duration::from_secs(1));
+            let _receiver = Arc::clone(&receiver);
+            threads.push(thread::spawn(move || loop {
+                let job = _receiver.lock().unwrap().recv();
+                println!("index: {i} got a job; executing.");
+                job.unwrap()();
+            }));
 
-                    if (jobs.len() > 0) {
-                        let job = jobs.pop();
-                        job();
-                    }
-                }
-            }))
+            // Mutex 没有提供显式的 unlock 方法，它依赖于作用域的结束去释放锁。`while let, for in` 他们形成的是作用域快，在当前用例中只有 job 结束之后才会释放锁。
+            //
+            // 这样导致的即使已经有新任务到达，但是因为 Mutex 锁住了 receiver，导致其他线程无法使用 receiver，无法接收运行任务，
+            // 只有等当前线程结束后，离开作用域自动释放 Mutex，其他线程才有机会使用 receiver，才能运行任务。
+            // 所以使用 `while let, for in` 这种方式还是类似单线程，同时运行的只有一个线程，因为接收者的锁没有正确的及时释放。
+            //
+            // let _receiver = Arc::clone(&receiver);
+            // threads.push(thread::spawn(move || loop {
+            //     for job in _receiver.lock().unwrap().recv() {
+            //         println!("index: {i} got a job; executing.");
+            //         job();
+            //     }
+            // }))
         }
 
-        ThreadPool { threads }
+        ThreadPool { threads, sender }
     }
 
     pub fn execute<F>(&self, f: F)
@@ -46,5 +60,8 @@ impl ThreadPool {
         // 特征对象：运行时确定闭包类型，灵活但有额外开销。
         F: FnOnce() + Send + 'static,
     {
+        // 传递特征对象，因为函要求定长类型，特征属于非定长的类型
+        let box_f = Box::new(f);
+        self.sender.send(box_f);
     }
 }
