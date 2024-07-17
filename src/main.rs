@@ -1,59 +1,71 @@
-use futures::stream;
-use ilearn::threadpool::ThreadPool;
-use std::{
-    fs,
-    io::{BufRead, BufReader, Write},
-    net, thread,
-    time::Duration,
-};
+use async_std::prelude::*;
+use futures::{future, StreamExt};
+use std::time::Duration;
 
 fn main() {
     /*
      *
-     * ## 实战：多线程 Web 服务器（代码优化和资源清理）
-     * lib.rs：
-     * ```rust
-     * // lib.rs
-     * use std::{
-     *     sync::{
-     *         mpsc::{self, Sender},
-     *         Arc, Mutex,
-     *     },
-     *     thread::{self, JoinHandle},
-     * };
+     * ## 实战：async Web 服务器
+     * 在实现单线程 Web 服务器和传统的多线程 Web 服务器后，了解并熟悉了相关的概念，现在开始实现更现代的 async/await 服务器。
      *
+     * 多线程 Web 服务器的实现，lib.rs：
+     * ```rust
      * pub type Job = Box<dyn FnOnce() + Send + 'static>;
+     *
+     * pub struct Worker {
+     *     id: usize,
+     *     thread: Option<JoinHandle<()>>,
+     * }
+     * impl Worker {
+     *     fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
+     *         // Mutex 没有提供显式的 unlock 方法，它依赖于作用域的结束去释放锁。`while let, for in` 他们形成的是作用域快，在当前用例中只有 job 结束之后才会释放锁。
+     *         //
+     *         // 这样导致的即使已经有新任务到达，但是因为 Mutex 锁住了 receiver，导致其他线程无法使用 receiver，无法接收运行任务，
+     *         // 只有等当前线程结束后，离开作用域自动释放 Mutex，其他线程才有机会使用 receiver，才能运行任务。
+     *         // 所以使用 `while let, for in` 这种方式还是类似单线程，同时运行的只有一个线程，因为接收者的锁没有正确的及时释放。
+     *
+     *         let thread = thread::spawn(move || loop {
+     *             let message = receiver.lock().unwrap().recv();
+     *             match message {
+     *                 Ok(job) => {
+     *                     println!("thread {id} got a job; executing.");
+     *                     job();
+     *                 }
+     *                 Err(_) => {
+     *                     println!("thread {id} disconnected; shutting down.");
+     *                     break;
+     *                 }
+     *             }
+     *         });
+     *         Worker {
+     *             id,
+     *             thread: Some(thread),
+     *         }
+     *     }
+     * }
+     *
      * pub struct ThreadPool {
-     *     threads: Vec<JoinHandle<()>>,
-     *     sender: Sender<Job>,
+     *     workers: Vec<Worker>,
+     *     sender: Option<Sender<Job>>,
      * }
      *
      * impl ThreadPool {
-     *     /// Create a new ThreadPool.
-     *     ///
-     *     /// The size is the number of threads in the pool.
-     *     ///
-     *     /// ## Panics
-     *     ///
-     *     /// The `new` function will panic if the size is zero.
      *     pub fn new(size: usize) -> Self {
      *         assert!(size > 0);
      *
-     *         let mut threads = Vec::with_capacity(size);
+     *         let mut workers = Vec::with_capacity(size);
      *         let (mut sender, mut receiver) = mpsc::channel::<Job>();
      *         let receiver = Arc::new(Mutex::new(receiver));
      *
      *         for i in 0..size {
      *             let _receiver = Arc::clone(&receiver);
-     *             threads.push(thread::spawn(move || loop {
-     *                 for job in _receiver.lock().unwrap().recv() {
-     *                     println!("index: {i} got a job; executing.");
-     *                     job();
-     *                 }
-     *             }))
+     *             workers.push(Worker::new(i, _receiver));
      *         }
      *
-     *         ThreadPool { threads, sender }
+     *         ThreadPool {
+     *             workers,
+     *             sender: Some(sender),
+     *         }
      *     }
      *
      *     pub fn execute<F>(&self, f: F)
@@ -65,223 +77,30 @@ fn main() {
      *     {
      *         // 传递特征对象，因为函要求定长类型，特征属于非定长的类型
      *         let box_f = Box::new(f);
-     *         self.sender.send(box_f);
+     *         self.sender.as_ref().unwrap().send(box_f);
      *     }
      * }
-     * ```
      *
-     * main.rs
-     * ```rust
-     * let listener =
-     *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error");
-     *
-     * // 生成有 5 个线程的线程池
-     * let thread_pool = ThreadPool::new(5);
-     *
-     * fn handle_request(mut stream: net::TcpStream) {
-     *     let buf_reader = BufReader::new(&stream);
-     *     let http_request: Vec<_> = buf_reader
-     *         .lines()
-     *         .map(|line| line.unwrap())
-     *         .take_while(|line| !line.is_empty())
-     *         .collect();
-     *
-     *     let (status_line, html) = if &http_request[0] == "GET / HTTP/1.1" {
-     *         (
-     *             "HTTP/1.1 200 OK",
-     *             fs::read_to_string(r"public/http-response-index.html").unwrap(),
-     *         )
-     *     } else {
-     *         (
-     *             "HTTP/1.1 404 NOT FOUND",
-     *             fs::read_to_string(r"public/http-response-404.html").unwrap(),
-     *         )
-     *     };
-     *
-     *     let response_head = format!("Content-Type:text/html\r\nContent-Length:{}", html.len());
-     *     let response_body = html;
-     *     let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
-     *
-     *     thread::sleep(Duration::from_secs(5));
-     *     stream.write_all(http_response.as_bytes());
-     * }
-     *
-     * for stream in listener.incoming() {
-     *     let mut stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
-     *     println!("Connection established!");
-     *
-     *     thread_pool.execute(|| handle_request(stream))
-     * }
-     * ```
-     *
-     * ### Worker 与 Thread
-     * 在 ThreadPool::new 函数中直接生成线程并 push 到线程池是比较难拓展的，代码耦合程度较高。
-     * 比如未来添加统计信息、日志记录、错误处理等功能，就需要遍历整个线程池的生成逻辑。
-     * 这里可以考虑创建一个 Worker 结构体，作为 ThreadPool 和任务线程联系的桥梁，提供更好的抽象和管理线程池的工作线程。来自 GPT 的优化：
-     *
-     * 1. 更好的职责分离
-     * 将工作线程封装在 Worker 结构体中可以清晰地定义每个组件的职责：
-     *     - ThreadPool：负责管理线程池的生命周期，包括启动和停止工作线程，分发任务等
-     *     - Worker：负责从任务队列中获取任务并执行
-     * 这种职责分离使得代码更清晰，更易于维护和扩展。
-     *
-     * 2. 便于扩展和修改
-     * 将线程的逻辑封装在 Worker 中，使得将来在需要修改工作线程的行为时，可以集中在 Worker 类型中进行修改，而不需要遍历整个代码库。
-     * 例如，可以在 Worker 中添加统计信息、日志记录、错误处理等功能，而这些修改不会影响 ThreadPool 的代码。
-     *
-     * 3. 更好的错误处理和资源管理
-     * Worker 可以更容易地管理线程的生命周期，包括启动、停止和错误处理。例如可以在 Worker 中实现一些高级功能，例如线程重启、任务超时等。
-     *
-     * 4. 更好的封装和复用
-     * Worker 类型可以复用在其他类似的场景中，不仅限于当前的线程池实现。例如可以有不同类型的 Worker，它们可以有不同的任务获取和执行策略。
-     *
-     * 可以看到只要合理的抽象，代码的可维护性就会极大的提升，现在开始构建 Worker。
-     *
-     * 将 ThreadPool 存储的线程管理改为 workers：
-     * ```rust
-     * pub struct ThreadPool {
-     *     workers: Vec<Worker>,
-     *     sender: Sender<Job>,
-     * }
-     * ```
-     *
-     * Worker 结构体需要存储线程：
-     * ```rust
-     * struct Worker {
-     *     id: usize,
-     *     thread: JoinHandle<()>,
-     * }
-     * ```
-     *
-     * 在生成线程池时，需要生成线程，但是线程现在转移到 worker 中管理，所以线程的生成也由 worker 提供：
-     * ```rust
-     * // Worker::new
-     * fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
-     *     // 注意 Mutex 释放锁的问题
-     *     //
-     *     // Mutex 没有提供显式的 unlock 方法，它依赖于作用域的结束去释放锁。`while let, for in` 他们形成的是作用域快，在当前用例中只有 job 结束之后才会释放锁。
-     *     //
-     *     // 这样导致的即使已经有新任务到达，但是因为 Mutex 锁住了 receiver，导致其他线程无法使用 receiver，无法接收运行任务，
-     *     // 只有等当前线程结束后，离开作用域自动释放 Mutex，其他线程才有机会使用 receiver，才能运行任务。
-     *     // 所以使用 `while let, for in` 这种方式还是类似单线程，同时运行的只有一个线程，因为接收者的锁没有正确的及时释放。
-     *
-     *     let thread = thread::spawn(move || loop {
-     *         let job = receiver.lock().unwrap().recv();
-     *         println!("thread {id} got a job; executing.");
-     *         job.unwrap()();
-     *     });
-     *     Worker { id, thread }
-     * }
-     *
-     * // ThreadPool::new
-     * pub fn new(size: usize) -> Self {
-     *     assert!(size > 0);
-     *
-     *     let mut workers = Vec::with_capacity(size);
-     *     let (mut sender, mut receiver) = mpsc::channel::<Job>();
-     *     let receiver = Arc::new(Mutex::new(receiver));
-     *
-     *     for i in 0..size {
-     *         let _receiver = Arc::clone(&receiver);
-     *         workers.push(Worker::new(i, _receiver));
-     *     }
-     *
-     *     ThreadPool { workers, sender }
-     * }
-     * ```
-     *
-     * 到此，Worker 的抽象就已经完成了，后续需要对线程做日志或其他拓展都不需要遍历线程池，理清楚 Worker 结构体即可。
-     *
-     *
-     * ### 线程池与 Drop
-     * 在并发请求中，如果某一个任务正在执行或者还未执行但已经进入消息队列，此时关闭程序，就会造成请求中失败的明显错误。
-     * 例如将线程池的数量设置为2，然后尝试三个请求并发，接着终止程序，可能就会看到请求其实已经建立连接，但是由于程序终止，导致错误。
-     *
-     * 为了处理已经建立好连接的请求，需要对线程池的 Drop 进行一定改造，为线程池实现 Drop 特征，
-     * 利用 Drop 特征和 join 方法，在停止时要求线程池中的线程等待完成后才允许 drop：
-     * ```rust
      * impl Drop for ThreadPool {
      *     fn drop(&mut self) {
-     *         for worker in self.workers {
-     *             worker.thread.join().unwrap();
-     *         }
-     *     }
-     * }
-     * ```
-     * 但是这里有一个问题，self 的 workers 是一个存储线程的列表，它要拥有线程的所有权，而 join 方法需要拿走线程的所有权。
-     * 在 SafeRust 中，根据所有权规则，一个值最多只有一个所有者，所以 workers 与 join 不能同时拥有线程所有权。
-     * ```rust
-     * // join 方法拿走线程的所有权
-     * pub fn join(self) -> Result<T> {
-     *     self.0.join()
-     * }
-     * ```
-     *
-     * 所有权冲突有多种解决办法，其中一个常用的办法是利用 Option 包裹结构体，因为 Option 可以表达 Some 和 None 两种状态：
-     * ```rust
-     * pub struct Worker {
-     *     id: usize,
-     *     thread: Option<JoinHandle<()>>,
-     * }
-     *
-     * // Worker::new
-     * Worker {
-     *     id,
-     *     thread: Some(thread),
-     * }
-     * ```
-     *
-     * 以上两处简单的修改并不涉及到线程池的代码，这就是抽象 Worker 的优势。
-     *
-     * Option 的 take 方法，可以拿走线程的所有权：
-     * ```rust
-     * impl Drop for ThreadPool {
-     *     fn drop(&mut self) {
-     *         for worker in self.workers {
-     *             if let Some(thread) = worker.thread.take() {
-     *                 thread.join().unwrap();
-     *             }
-     *         }
-     *     }
-     * }
-     * ```
-     *
-     * 但是以上代码还是会有类型错误，因为使用 `for in` 拿走的是 worker 的所有权，所以会报错。
-     *
-     * 因为要拿走 worker 内线程的所有权，拿走线程所有权后 worker.thread 将会变为 None。根据借用规则，应该使用 workers 的可变引用，然后再取走 worker 存储的线程：
-     * ```rust
-     * impl Drop for ThreadPool {
-     *     fn drop(&mut self) {
+     *         drop(self.sender.take());
      *         for worker in &mut self.workers {
      *             if let Some(thread) = worker.thread.take() {
+     *                 println!("Shutting down worker {}", worker.id);
      *                 thread.join().unwrap();
+     *                 println!("Shut down worker {}", worker.id);
      *             }
      *         }
      *     }
      * }
      * ```
-     *
-     * 验证 drop 是否生效，可以在 incoming 函数中使用 take，只获取前两个请求，然后自动结束：
-     * ```rust
-     * // main.rs
-     * for stream in listener.incoming().take(2) {
-     *     let mut stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
-     *     println!("Connection established!");
-     *
-     *     thread_pool.execute(|| handle_request(stream))
-     * }
-     * ```
-     *
-     * 运行后会发现有些线程可以关闭，有些线程无法关闭，甚至有些请求无法返回响应，这是因为 join 在等待线程内部消息通道的关闭。
-     *
-     * ### 停止消息通道
-     *
+     * 多线程 Web 服务器的实现，main.rs：
      * ```rust
      * let listener =
      *     net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error");
      *
      * // 生成有 5 个线程的线程池
-     * let thread_pool = ThreadPool::new(5);
+     * let thread_pool = ThreadPool::new(2);
      *
      * fn handle_request(mut stream: net::TcpStream) {
      *     let buf_reader = BufReader::new(&stream);
@@ -320,162 +139,234 @@ fn main() {
      * println!("The server has stopped running.");
      * ```
      *
-     * 分析并解决无法关闭线程与请求无应答：
-     * 1. 第一个请求到达，`thread_pool.execute` 分配线程 x 执行，任务执行完成返回响应
-     * 2. 第二个请求到达，`thread_pool.execute` 分配线程 y 执行，此时由于 `incoming().take(2)` 只取两个请求，所以主线程往下运行，输出 The server has stopped running.
-     * 3. 主线程运行到最后，开始清理作用域内的资源，rust 通过 Drop 特征清理各种类型的资源，线程无法关闭以及请求无法再响应的问题就出现在这。
-     *      rust 通过 Drop 特征清理资源，Drop 特征就是在一个作用域结束时，rust 会自动调用清理的方法。这个特征功能是编译器在编译时期自动插入的，是一个零开销的实现。
-     *      因此，rust 通过 Drop 清理 ThreadPool时，会调用 ThreadPool 的 drop 方法：
-     *      ```rust
-     *       impl Drop for ThreadPool {
-     *           fn drop(&mut self) {
-     *               for worker in &mut self.workers {
-     *                   if let Some(thread) = worker.thread.take() {
-     *                       println!("Shutting down worker {}", worker.id);
-     *                       thread.join().unwrap();
-     *                   }
-     *               }
-     *           }
-     *       }
-     *      ```
-     *      在 `for in` 迭代中，每一个线程都有 `join` 等待线程完成的时刻，for 循环是顺序执行的，这意味着是一个接一个地检查每个 worker thread，然后等待（join）每个 worker 线程结束。
-     *      又因为 worker thread 是通过消息通道获取可执行的闭包：
-     *      ```rust
-     *      // Worker::new
-     *      let thread = thread::spawn(move || loop {
-     *          let job = receiver.lock().unwrap().recv();
-     *          println!("thread {id} got a job; executing.");
-     *          job.unwrap()();
-     *      });
-     *      ```
-     *      此时，worker 的线程会一直阻塞在获取可执行的闭包 `recv` 这个函数中，当前阻塞的线程就是 worker 线程响应第一个请求的线程。
-     *      最后就会陷入死锁状态，主线程想关闭清理资源，并且是希望等待其他线程运行结束后（join 方法决定）再关闭，但是其他线程一直在等待可执行的闭包，最后导致死锁。
-     *      这个问题很好解决，在第一次使用消息通道时就已经碰见消息通道没有关闭，主线程无法结束的这个问题。只需要释放发送者，接受者就会受到通道关闭的错误信息。
-     *      在哪关闭？当程序主动尝试释放终止时，这个时间点是最合理的，这个时间点就是调用 drop 方法的时候。
-     *      ```rust
-     *      impl Drop for ThreadPool {
-     *          fn drop(&mut self) {
-     *              drop(self.sender);
-     *              for worker in &mut self.workers {
-     *                  if let Some(thread) = worker.thread.take() {
-     *                      println!("Shutting down worker {}", worker.id);
-     *                      thread.join().unwrap();
-     *                      println!("Shut down worker {}", worker.id);
-     *                  }
-     *              }
-     *          }
-     *      }
-     *      ```
-     *      drop 函数需要拿走 sender 的所有权，但是线程池需要拥有 sender，和 worker 与 thread 的问题类似，使用 Option 解决该问题：
-     *      ```rust
-     *      pub struct ThreadPool {
-     *          workers: Vec<Worker>,
-     *          sender: Option<Sender<Job>>,
-     *      }
+     * 对于高并发的网络/IO，线程还是太重了，使用 async 实现 Web 服务器才是最适合的。
      *
-     *      // ThreadPool::execute
-     *      pub fn execute<F>(&self, f: F)
-     *      where
-     *          // 泛型参数形式
-     *          // 泛型参数：编译时确定闭包类型，性能更好，无需动态分发。
-     *          // 特征对象：运行时确定闭包类型，灵活但有额外开销。
-     *          F: FnOnce() + Send + 'static,
-     *      {
-     *          // 传递特征对象，因为函要求定长类型，特征属于非定长的类型
-     *          let box_f = Box::new(f);
-     *          self.sender.as_ref().unwrap().send(box_f);
-     *      }
-     *      ```
-     *      execute 方法中，使用 `as_ref` 获取发送者的不可变引用。改造 drop 逻辑，使用 take 从 ThreadPool 中取出 sender 所有权并释放 sender：
-     *      ```rust
-     *      impl Drop for ThreadPool {
-     *          fn drop(&mut self) {
-     *              drop(self.sender.take());
-     *              for worker in &mut self.workers {
-     *                  if let Some(thread) = worker.thread.take() {
-     *                      println!("Shutting down worker {}", worker.id);
-     *                      thread.join().unwrap();
-     *                      println!("Shut down worker {}", worker.id);
-     *                  }
-     *              }
-     *          }
-     *      }
-     *      ```
-     *      最后，当释放发送者关闭消息通道时，接收者接受的可能是一个错误，需要处理：
-     *      ```rust
-     *      let thread = thread::spawn(move || loop {
-     *          let message = receiver.lock().unwrap().recv();
-     *          match message {
-     *              Ok(job) => {
-     *                  println!("thread {id} got a job; executing.");
-     *                  job();
-     *              }
-     *              Err(_) => {
-     *                  // 当消息通道关闭时，退出循环获取的逻辑
-     *                  println!("thread {id} disconnected; shutting down.");
-     *                  break;
-     *              }
-     *          }
-     *      });
-     *      ```
-     * 
-     * 经过以上流程，线程池、程序都正常关闭，再次学到如何定位并解决多线程编程中死锁的问题。
+     * ### async-std
+     * 回顾之前所学的 async/await，async/await 作为 Future 的语法糖，最终会被编译器编译为 Future 状态机。
+     * rust 为了减少打包体积的大小，只提供了 async/await 相关的标准，并没有提供默认的运行时。
+     * 之前的代码尝试实现了简单的执行器来进行 .await 或 poll，但是在实际项目中，这还远远不够，需要选择一个比较完备的第三方 async 运行时来实现相关的功能。
      *
-     * ### 更多
-     * 其他功能：
-     * - https://course.rs/advance-practice1/graceful-shutdown.html#可以做的更多
+     * > 回顾重点：
+     * > - await 不会阻塞当前线程，而是让出当前线程的执行权，在 async 函数结束前会一直异步等待 await 结束
+     * > - `.await` 是非阻塞线程的，当 `future.await` 时，它暂停的是当前 future 所在的上层 async 函数，并让出当前线程的执行权，当前线程可以执行与 `future.await` 上层同级的其它异步 Future
+     * > - Future 是一个能**产出值的异步计算**(值可能为空，例如 `()`)。它是异步函数的返回值和被执行的关键，异步函数则是异步编程的核心，所以 Future 特征是 Rust 异步编程的核心。
+     * > - Future 是惰性的，需要在 poll 函数调用后才会真正执行，同时 poll 只会获取异步任务执行的状态，对异步任务执行流程和结果没有任何影响。
+     * > - **Future 一定要有一个能表达任务状态的数据**，这样执行器在 poll Future 时才知道对 Future 的操作是等待 `Poll::Pedning` 还是结束 `Poll::Ready`。
+     * > - 避免 Future 完成后被再次执行，原生的 Future trait 只提供了 Poll:Ready 和 Poll::Pending 两种状态，即使 Future 已经处于 Poll::Ready 的状态，外部也是可以再次 poll 这个 Future 的。
+     * > - FusedFuture 特征通过增加 is_terminated 方法，提供了一种明确的方式来检查 Future 是否已经完成。
+     * > - select! 和 join!
+     * > - async 语句块和 async fn 最大的区别就是 async 语句块无法显式的声明返回值，当配合 `?`（错误传播）一起使用时就会有类型错误。
+     * > - 由于 rust async/await 的调度，Future 可能运行在不同的线程上，由于多线程需要保证数据的所有权和引用的正确性。所以当处于多线程时 Future 需要关注 **.await 运行过程中**，传递给 Future 作用域的变量类型是否是 Send。
+     *
+     * 现在先选择 async-std ，该包的最大优点就是跟标准库的 API 类似，相对来说更简单易用。
+     *
+     * 首先先将 handle_request 改成 async 函数：
+     * ```rust
+     * async fn handle_request(mut stream: net::TcpStream) {
+     *     let buf_reader = BufReader::new(&stream);
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines()
+     *         .map(|line| line.unwrap())
+     *         .take_while(|line| !line.is_empty())
+     *         .collect();
+     *
+     *     let (status_line, path) = if &http_request[0] == "GET / HTTP/1.1" {
+     *         ("HTTP/1.1 200 OK", r"public/http-response-index.html")
+     *     } else {
+     *         ("HTTP/1.1 404 NOT FOUND", r"public/http-response-404.html")
+     *     };
+     *
+     *     let html = fs::read_to_string(path).unwrap();
+     *     let response_head = format!("Content-Type:text/html\r\nContent-Length:{}", html.len());
+     *     let response_body = html;
+     *     let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+     *
+     *     thread::sleep(Duration::from_secs(5));
+     *     stream.write_all(http_response.as_bytes());
+     * }
+     * ```
+     *
+     * 然后可以选择将 main 函数改造成 async，或者选择在 main 函数中使用 block_on：
+     * ```rust
+     * // 将 main 函数改造成 async
+     * #[async_std::main]
+     * async fn main() {
+     *     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+     *     for stream in listener.incoming() {
+     *         let stream = stream.unwrap();
+     *         // 警告，这里无法并发
+     *         handle_connection(stream).await;
+     *     }
+     * }
+     *
+     * // 或者在 main 函数中使用 block_on，将 async 转移到 start 函数
+     * async fn start() {
+     *     let listener =
+     *         net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error");
+     *
+     *     for stream in listener.incoming() {
+     *         let mut stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
+     *         println!("Connection established!");
+     *         // 警告，这里无法并发
+     *         handle_request(stream).await
+     *     }
+     * }
+     *
+     * async_std::task::block_on(start());
+     * ```
+     *
+     * 以上代码改造后，测试运行会发现效果与单线程 Web 服务器一样，需要等待前一个请求完成后，后一个请求才会开始运行。
+     * 原因在于：handle_reuqest 函数中使用线程休眠（线程阻塞）模拟了耗时任务，线程休眠后异步运行时无法调度任务。
+     *
+     * 为什么后续的请求不会安排到其他线程执行？分析以上代码：
+     * 当前的 handle_request 与 async_std 的执行器属于同一个线程，handle_request 阻塞当前线程后，当前线程无法处理任务，下一个请求只能等待。
+     *
+     * > 理解：
+     * >
+     * > async 异步运行时是基于非阻塞任务的假设设计的，在大部分时候都是基于**单线程异步并发**的认识去使用 async/await，这与 JavaScript 的单线程事件循环（event loop）是类似的。
+     * > async 异步运行时假设任务会在遇到 I/O 操作或其他需要等待的操作时会让出控制权（例如通过 await，由 Waker 触发执行器 poll 获取 Future 状态后决定是否需要继续运行），如果任务执行了阻塞操作，那么在线程解除阻塞前任务不会让出线程的控制权，调度器无法将正在执行的任务迁移到其他线程。
+     * >
+     * > 异步任务调度器依赖于任务的非阻塞特性来高效地调度任务。除了单线程异步并发外，异步运行时（如 async-std 和 tokio）通常还会使用一个线程池来**并行**执行任务。
+     * > 线程池中的每个线程都会执行一个事件循环（event loop）来处理任务队列中的任务，所以如果一个任务阻塞了当前线程，那么这个线程上的其他任务都会受到影响。
+     *
+     * 将线程休眠改成异步的休眠，避免影响其他的任务执行：
+     * ```diff
+     * - thread::sleep(Duration::from_secs(5));
+     * + async_std::task::sleep(Duration::from_secs(5)).await;
+     * ```
+     *
+     * 运行后，发现还是单线程效果，这是因为标准库中的 incoming() 是一个阻塞的迭代器，需要将其改成不阻塞的 stream，参考 【unit 74-async 异步编程：Stream 流处理】中 for_each_concurrent。
+     * 标准库中的 net::TcpListener 的生成默认是阻塞的，应该改成异步的 async_std::net::TcpListener
+     * ```rust
+     * async fn start() {
+     *     let listener = async_std::net::TcpListener::bind("127.0.0.1:7878")
+     *         .await
+     *         .expect("TcpListener started with an error");
+     *
+     *     listener
+     *         .incoming()
+     *         .enumerate()
+     *         .for_each_concurrent(None, |(i, stream)| async move {
+     *             let stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
+     *             println!("{i} Connection established!");
+     *             handle_request(stream).await
+     *         })
+     *         .await;
+     * }
+     * ```
+     *
+     * > rust 的迭代器并不是一个迭代器处理完集合中的所有数据后再传递给下一个迭代器处理，它的设计更像是中间件，即不同方法的组合。这与 JavaScript 不相同。
+     * >
+     * > 对于一条数据，当前迭代器的逻辑处理完成后，就会给到下一个迭代器处理。并不是等收集所有数据，在一个迭代器中处理完成这些数据后再给到下一个迭代器。
+     *
+     * 为了异步应该要将所有的同步耗时操作都改成异步的，比如当前服务器中 html 文件的同步（阻塞）读写，响应同步（阻塞）返回：
+     * ```rust
+     * async fn handle_request(mut stream: async_std::net::TcpStream) {
+     *     let buf_reader = async_std::io::BufReader::new(&stream);
+     *
+     *     let http_request: Vec<_> = buf_reader
+     *         .lines()
+     *         .map(|line| line.unwrap())
+     *         .take_while(|line| future::ready(!line.is_empty()))
+     *         .collect()
+     *         .await;
+     *
+     *     let (status_line, path) = if &http_request[0] == "GET / HTTP/1.1" {
+     *         ("HTTP/1.1 200 OK", r"public/http-response-index.html")
+     *     } else {
+     *         ("HTTP/1.1 404 NOT FOUND", r"public/http-response-404.html")
+     *     };
+     *
+     *     let html = async_std::fs::read_to_string(path).await.unwrap();
+     *     let response_head = format!("Content-Type:text/html\r\nContent-Length:{}", html.len());
+     *     let response_body = html;
+     *     let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
+     *
+     *     async_std::task::sleep(Duration::from_secs(5)).await;
+     *     // use async_std::io::WriteExt;
+     *     stream.write_all(http_response.as_bytes()).await;
+     * }
+     * ```
+     *
+     * ### 并行
+     * async 异步运行时是基于非阻塞任务的假设设计的，在大部分时候都是基于**单线程异步并发**的认识去使用 async/await，这与 JavaScript 的单线程事件循环（event loop）是类似的。
+     * 异步任务调度器依赖于任务的非阻塞特性来高效地调度任务。除了单线程异步并发外，异步运行时（如 async-std 和 tokio）通常还会使用一个线程池来**并行**执行任务。
+     *
+     * 可以手动指定任务到另外的线程中执行，async_std::task::spawn 是一种高效的异步执行机制，它利用协程和线程池来避免过度创建线程，从而降低资源消耗并提高性能：
+     * ```rust
+     * async fn start() {
+     *     let listener = async_std::net::TcpListener::bind("127.0.0.1:7878")
+     *         .await
+     *         .expect("TcpListener started with an error");
+     *
+     *     listener
+     *         .incoming()
+     *         .enumerate()
+     *         .for_each_concurrent(None, |(i, stream)| async move {
+     *             let stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
+     *             println!("{i} Connection established!");
+     *             // handle_request(stream).await
+     *             async_std::task::spawn(handle_request(stream));
+     *         })
+     *         .await;
+     * }
+     * ```
+     *
+     * ### 测试
+     * 可以选择 public/async-bench.js 测试，也可以参考 course.rs 中的测试用例：https://course.rs/advance/async/web-server.html#测试-handle_connection-函数
      * 
-     * 重点关注：
-     * - https://course.rs/advance-practice1/graceful-shutdown.html#上一章节的遗留问题
-     * - 如何实现线程池，主线程如何发送任务给工作线程，为什么需要使用消息通道，线程池如何管理工作线程，抽象 Worker 的好处
-     * - Mutex 与 while let, for in 形成的锁问题导致同一时间只有一个线程在执行，关闭消息通道碰见的死锁问题
-     * - 使用 mpsc 多发送者单接收者的好处是不会存在多个接收者竞争一个执行闭包，消息通道中任务就是闭包的代名词。
+     *
+     * ### 总结
+     * rust 的 async 与 JavaScript 类似，在大部分时候都是以单线程异步并发的形式出现。
+     * 但 rust async 又比 JavaScript async 强大，并且考虑的东西更多。
      * 
+     * 选择 async 意味着相关的同步耗时任务需要考虑改造成 Future，并且尽量不出现线程阻塞的情况，否则会出现线程不能执行其他任务的问题。
      */
 
-    {
-        let listener =
-            net::TcpListener::bind("127.0.0.1:7878").expect("TcpListener started with an error");
+    async fn handle_request(mut stream: async_std::net::TcpStream) {
+        let buf_reader = async_std::io::BufReader::new(&stream);
 
-        // 生成有 5 个线程的线程池
-        let thread_pool = ThreadPool::new(2);
+        let http_request: Vec<_> = buf_reader
+            .lines()
+            .map(|line| line.unwrap())
+            .take_while(|line| future::ready(!line.is_empty()))
+            .collect()
+            .await;
 
-        fn handle_request(mut stream: net::TcpStream) {
-            let buf_reader = BufReader::new(&stream);
-            let http_request: Vec<_> = buf_reader
-                .lines()
-                .map(|line| line.unwrap())
-                .take_while(|line| !line.is_empty())
-                .collect();
+        let (status_line, path) = if &http_request[0] == "GET / HTTP/1.1" {
+            ("HTTP/1.1 200 OK", r"public/http-response-index.html")
+        } else {
+            ("HTTP/1.1 404 NOT FOUND", r"public/http-response-404.html")
+        };
 
-            let (status_line, html) = if &http_request[0] == "GET / HTTP/1.1" {
-                (
-                    "HTTP/1.1 200 OK",
-                    fs::read_to_string(r"public/http-response-index.html").unwrap(),
-                )
-            } else {
-                (
-                    "HTTP/1.1 404 NOT FOUND",
-                    fs::read_to_string(r"public/http-response-404.html").unwrap(),
-                )
-            };
+        let html = async_std::fs::read_to_string(path).await.unwrap();
+        let response_head = format!("Content-Type:text/html\r\nContent-Length:{}", html.len());
+        let response_body = html;
+        let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
 
-            let response_head = format!("Content-Type:text/html\r\nContent-Length:{}", html.len());
-            let response_body = html;
-            let http_response = format!("{status_line}\r\n{response_head}\r\n\r\n{response_body}");
-
-            thread::sleep(Duration::from_secs(5));
-            stream.write_all(http_response.as_bytes());
-        }
-
-        for stream in listener.incoming().take(2) {
-            let mut stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
-            println!("Connection established!");
-
-            thread_pool.execute(|| handle_request(stream))
-        }
-        println!("The server has stopped running.");
+        async_std::task::sleep(Duration::from_secs(5)).await;
+        // use async_std::io::WriteExt;
+        stream.write_all(http_response.as_bytes()).await;
     }
-    println!("=====================  main end  ==================");
-}
 
+    async fn start() {
+        let listener = async_std::net::TcpListener::bind("127.0.0.1:7878")
+            .await
+            .expect("TcpListener started with an error");
+
+        listener
+            .incoming()
+            .enumerate()
+            .for_each_concurrent(None, |(i, stream)| async move {
+                let stream = stream.unwrap(); // 处理连接请求，如果连接请求不成功则报错
+                println!("{i} Connection established!");
+                // handle_request(stream).await;
+                async_std::task::spawn(handle_request(stream));
+            })
+            .await;
+    }
+
+    async_std::task::block_on(start());
+
+    println!("The server has stopped running.");
+}
