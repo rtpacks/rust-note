@@ -15,6 +15,18 @@ thread_local = "1.1.8"
 tokio = { version = "1.38.0", features = ["full"] }
 lazy_static = "1.4.0"
 thiserror = "1.0.61"
-anyhow="1.0.86"
-error-chain="0.12.4"
-futures="0.3.30"
+anyhow = "1.0.86"
+error-chain = "0.12.4"
+futures = "0.3"
+
+[dependencies.async-std]
+version = "1.6"
+features = ["attributes"]
+
+# futures = "0.3"：在 [dependencies] 部分中定义一个标准依赖项，表示项目依赖于 futures 库的 0.3 版本范围。Cargo 会尝试获取兼容 0.3.x 版本的最新版本。
+# 
+# [dependencies.async-std]：这是一种扩展语法，用于为依赖项指定更多的属性。
+# - version = "1.6"：指定 async-std 库的版本为 1.6。Cargo 会尝试获取这个确切的版本。
+# - features = ["attributes"]：为 async-std 启用名为 attributes 的特性。特性是 Rust 的依赖管理系统中的一个功能，允许用户启用或禁用库的某些可选部分。
+# 
+# [dependencies.async-std] 也可以改写成 `async-std = { version  = "", features = {} }`
