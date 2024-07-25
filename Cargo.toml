@@ -23,6 +23,7 @@ anyhow = "1.0.86"
 error-chain = "0.12.4"
 futures = "0.3"
 mini-redis = "0.4.1"
+bytes = "1.6.1"
 
 [dependencies.async-std]
 version = "1.6"
