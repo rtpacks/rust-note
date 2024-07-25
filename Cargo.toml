@@ -3,6 +3,10 @@ name = "ilearn"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "server"
+path = "bin/server.rs"
+
 [[example]]
 name = "redis-server-test"
 path = "examples/redis-server-test.rs"
