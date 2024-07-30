@@ -160,6 +160,40 @@ async fn main() -> Result<()> {
      * }
      * ```
      *
+     * #### 手动拷贝
+     * 如果不适用 io::copy，也可以手动实现复制过程，read 和 write 的过程都是间隔非一次性完成的，所以需要 loop。
+     * 当然并不需要担心 loop 会导致性能问题，因为当 read 和 write 切换任务时，loop 会被暂停，使用 read 和 write 等方法需要导入 AsyncRead 和 AsyncWrite 特征：
+     * ```rust
+     * let listener = TcpListener::bind("127.0.0.1:6330").await?;
+     *
+     * async fn process(mut stream: net::TcpStream) {
+     *     let mut buffer = [0; 1024];
+     *     loop {
+     *         match stream.read(&mut buffer).await {
+     *             Ok(0) => {
+     *                 return;
+     *             }
+     *             Ok(n) => {
+     *                 if stream.write_all(&buffer[..n]).await.is_err() {
+     *                     return;
+     *                 }
+     *             }
+     *             Err(_) => return,
+     *         }
+     *     }
+     * }
+     *
+     * loop {
+     *     let (stream, addr) = listener.accept().await?;
+     *     tokio::spawn(async move { process(stream).await });
+     * }
+     * ```
+     *
+     * ### 堆分配缓冲区
+     * 
+     *
+     *
+     *
      *
      */
 
@@ -220,15 +254,41 @@ async fn main() -> Result<()> {
     //     }
     // }
 
+    // {
+    //     let listener = TcpListener::bind("127.0.0.1:6330").await?;
+
+    //     async fn process(mut stream: net::TcpStream) {
+    //         let (mut reader, mut writer) = stream.split();
+
+    //         if io::copy(&mut reader, &mut writer).await.is_err() {
+    //             eprintln!("failed to copy");
+    //         };
+    //     }
+
+    //     loop {
+    //         let (stream, addr) = listener.accept().await?;
+    //         tokio::spawn(async move { process(stream).await });
+    //     }
+    // }
+
     {
         let listener = TcpListener::bind("127.0.0.1:6330").await?;
 
         async fn process(mut stream: net::TcpStream) {
-            let (mut reader, mut writer) = stream.split();
-
-            if io::copy(&mut reader, &mut writer).await.is_err() {
-                eprintln!("failed to copy");
-            };
+            let mut buffer = [0; 1024];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) => {
+                        return;
+                    }
+                    Ok(n) => {
+                        if stream.write_all(&buffer[..n]).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
         }
 
         loop {
