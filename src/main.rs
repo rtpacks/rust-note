@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use mini_redis::{Frame, Result};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -389,30 +389,104 @@ async fn main() -> Result<()> {
      * }
      * ```
      *
-     * **BufMut 特征**
+     * **Buf 特征与 BufMut 特征**
      *
-     * 每次需要手动判断游标边界显得非常麻烦，bytes 提供了 BytesMut，方便解决此类问题，使用 BytesMut 作为缓冲区类型，它是 Bytes 的可变版本：
+     * 手动处理游标需要考虑许多边界问题，bytes 包提供了两个有用的特征 Buf、BufMut，配合 read_buf 方法可以实现自动管理游标：
+     * - Buf 特征：实现 Buf 特征的类型主要用于读取数据。从缓冲区获取数据，同时内部游标自动更新，以保证下一次读取时从正确的位置开始。
+     * - BufMut 特征：实现 BufMut 特征的类型不仅允许读取数据，还支持写入数据，并且会自动管理写入时的游标位置。这样在执行写入操作时，保证处于下一个可写入的位置。
+     * 当 T: BufMut (特征约束，说明类型 T 实现了 BufMut 特征) 被传给 read_buf() 方法时，缓冲区 T 的内部游标会自动进行更新。
+     *
      * ```rust
-     * use bytes::BytesMut;
-     * use tokio::net::TcpStream;
+     * use bytes::{Buf, BytesMut};
      *
      * pub struct Connection {
-     *     stream: TcpStream,
+     *     stream: net::TcpStream,
      *     buffer: BytesMut,
      * }
-     *
      * impl Connection {
-     *     pub fn new(stream: TcpStream) -> Connection {
+     *     pub fn new(stream: net::TcpStream) -> Connection {
      *         Connection {
      *             stream,
-     *             // 分配一个缓冲区，具有4kb的缓冲长度
-     *             buffer: BytesMut::with_capacity(4096),
+     *             // 分配一个缓冲区，具有 4kb 的缓冲长度
+     *             buffer: BytesMut::with_capacity(1024 * 4),
+     *         }
+     *     }
+     *
+     *     pub async fn read_frame(&mut self) -> mini_redis::Result<Option<Frame>> {
+     *         loop {
+     *             // 第一步：
+     *             // 尝试从缓冲区的数据中解析出一个数据帧，只有当数据足够被解析时，才会返回对应的帧数据，否则返回 None
+     *             if let Some(frame) = self.parse_frame()? {
+     *                 return Ok(Some(frame));
+     *             }
+     *
+     *             // 第二步：
+     *             // 如果缓冲区中的数据还不足以被解析为一个数据帧，需要从 socket 中读取更多的数据
+     *             // 使用 read 读取，将读取写入到写入器（缓冲区）中，并返回读取到的字节数
+     *             // 这里需要考虑避免覆盖之前读取的数据，在缓冲区满了后扩容缓冲区，增加缓冲区长度
+     *             // 通常缓冲区的写入和移除都是通过游标 (cursor) 来实现的。
+     *             // 这里借助实现了 BufMut 特征的 BytesMut 实现自动管理游标
+     *             //
+     *             // 当返回的字节数为 0 时，代表着读到了数据流的末尾，说明了对端关闭了连接。
+     *             // 此时需要检查缓冲区是否还有数据，若没有数据，说明所有数据成功被处理，
+     *             // 若还有数据，说明对端在发送字节流的过程中断开了连接，导致只发送了部分数据，需要抛出错误
+     *
+     *             if 0 == self.stream.read(&mut self.buffer).await? {
+     *                 if self.buffer.is_empty() {
+     *                     return Ok(None);
+     *                 }
+     *                 return Err("connection reset by peer".into());
+     *             }
      *         }
      *     }
      * }
      * ```
      *
-     * // TODO
+     * 使用 BytesMut 后，减少了手动管理游标的逻辑，代码易读性提升。
+     *
+     * 除了自动管理游标外，缓冲区初始化性能也值得关注，`Vec<u8>` 缓冲区有两种生成方式: `Vec::with_capacity(4096)` 和 `vec![0; 4096]`。
+     * - `Vec::with_capacity(4096)` 初始化的 Vec 只是分配了内存空间，长度为 0。如果直接将其传递给 TcpStream::read，它不会工作，直接返回 Ok(0)，因为 read 需要一个可以写入数据的缓冲区，其长度应当大于 0。
+     * - `vec![0; 4096]` 会初始化创建一个 4096 字节长度的数组，然后将数组的每个元素都填充上 0，这种初始化过程会存在一定的性能开销。
+     * 此外，当缓冲区长度不足时，新创建的缓冲区数组的初始化也会使用 0 被重新填充一遍，也会消耗一定的性能。
+     *
+     * **测试代码**
+     * ```rust
+     * let listener = TcpListener::bind("127.0.0.1:6330").await?;
+     *
+     * async fn process(mut stream: net::TcpStream) {
+     *     // let mut buffer = Vec::with_capacity(1024);
+     *     let mut buffer = vec![0; 1024];
+     *     loop {
+     *         match stream.read(&mut buffer).await {
+     *             Ok(0) => {
+     *                 println!("Ok(0)");
+     *                 return;
+     *             }
+     *             Ok(n) => {
+     *                 println!("Ok(n)");
+     *                 if stream.write_all(&buffer[..n]).await.is_err() {
+     *                     return;
+     *                 }
+     *             }
+     *             Err(_) => {
+     *                 println!("Err");
+     *                 return;
+     *             }
+     *         }
+     *     }
+     * }
+     *
+     * loop {
+     *     let (stream, addr) = listener.accept().await?;
+     *     tokio::spawn(async move { process(stream).await });
+     * }
+     * ```
+     *
+     * 与 `Vec<u8>` 相反，BytesMut 和 BufMut 就没有这个问题，它们无需被初始化，而且 BytesMut 还会阻止我们读取未初始化的内存。
+     * 当使用 Vec::with_capacity 生成传入 read 方法，read 会直接返回 Ok(0)，表示读取结束，事实上这是因为缓冲区没有长度可供存放数据。
+     * ```shell
+     * curl 127.0.0.1:6330
+     * ```
      */
 
     // {
@@ -515,70 +589,69 @@ async fn main() -> Result<()> {
     //     }
     // }
 
-    {
-        pub struct Connection {
-            stream: net::TcpStream,
-            buffer: Vec<u8>,
-            cursor: usize,
-        }
-        impl Connection {
-            pub fn new(stream: net::TcpStream) -> Connection {
-                Connection {
-                    stream,
-                    // 分配一个缓冲区，具有 4kb 的缓冲长度
-                    buffer: Vec::with_capacity(1024 * 4),
-                    cursor: 0,
-                }
-            }
+    // {
+    //     pub struct Connection {
+    //         stream: net::TcpStream,
+    //         buffer: Vec<u8>,
+    //         cursor: usize,
+    //     }
+    //     impl Connection {
+    //         pub fn new(stream: net::TcpStream) -> Connection {
+    //             Connection {
+    //                 stream,
+    //                 // 分配一个缓冲区，具有 4kb 的缓冲长度
+    //                 buffer: Vec::with_capacity(1024 * 4),
+    //                 cursor: 0,
+    //             }
+    //         }
 
-            pub async fn read_frame(&mut self) -> mini_redis::Result<Option<Frame>> {
-                loop {
-                    // 第一步：
-                    // 尝试从缓冲区的数据中解析出一个数据帧，只有当数据足够被解析时，才会返回对应的帧数据，否则返回 None
-                    if let Some(frame) = self.parse_frame()? {
-                        return Ok(Some(frame));
-                    }
+    //         pub async fn read_frame(&mut self) -> mini_redis::Result<Option<Frame>> {
+    //             loop {
+    //                 // 第一步：
+    //                 // 尝试从缓冲区的数据中解析出一个数据帧，只有当数据足够被解析时，才会返回对应的帧数据，否则返回 None
+    //                 if let Some(frame) = self.parse_frame()? {
+    //                     return Ok(Some(frame));
+    //                 }
 
-                    // 第二步：
-                    // 如果缓冲区中的数据还不足以被解析为一个数据帧，需要从 socket 中读取更多的数据
-                    // 使用 read 读取，将读取写入到写入器（缓冲区）中，并返回读取到的字节数
-                    // 这里需要考虑避免覆盖之前读取的数据，在缓冲区满了后扩容缓冲区，增加缓冲区长度
-                    // 通常缓冲区的写入和移除是通过游标 (cursor) 来实现的。
-                    //
-                    // 当返回的字节数为 0 时，代表着读到了数据流的末尾，说明了对端关闭了连接。
-                    // 此时需要检查缓冲区是否还有数据，若没有数据，说明所有数据成功被处理，
-                    // 若还有数据，说明对端在发送字节流的过程中断开了连接，导致只发送了部分数据，需要抛出错误
+    //                 // 第二步：
+    //                 // 如果缓冲区中的数据还不足以被解析为一个数据帧，需要从 socket 中读取更多的数据
+    //                 // 使用 read 读取，将读取写入到写入器（缓冲区）中，并返回读取到的字节数
+    //                 // 这里需要考虑避免覆盖之前读取的数据，在缓冲区满了后扩容缓冲区，增加缓冲区长度
+    //                 // 通常缓冲区的写入和移除是通过游标 (cursor) 来实现的。
+    //                 //
+    //                 // 当返回的字节数为 0 时，代表着读到了数据流的末尾，说明了对端关闭了连接。
+    //                 // 此时需要检查缓冲区是否还有数据，若没有数据，说明所有数据成功被处理，
+    //                 // 若还有数据，说明对端在发送字节流的过程中断开了连接，导致只发送了部分数据，需要抛出错误
 
-                    // 先检查缓冲区长度，确保缓冲区长度足够
-                    if self.cursor == self.buffer.len() {
-                        self.buffer.resize(self.cursor * 2, 0);
-                    }
+    //                 // 先检查缓冲区长度，确保缓冲区长度足够
+    //                 if self.cursor == self.buffer.len() {
+    //                     self.buffer.resize(self.cursor * 2, 0);
+    //                 }
 
-                    // 从缓冲区的游标位置开始写入新数据，避免旧数据被覆盖
-                    // read 方法读取的数据不会超出剩下的buffer长度，当 buffer 没有剩余空间时，read 方法就会结束读取
-                    let n = self.stream.read(&mut self.buffer[self.cursor..]).await?;
+    //                 // 从缓冲区的游标位置开始写入新数据，避免旧数据被覆盖
+    //                 // read 方法读取的数据不会超出剩下的buffer长度，当 buffer 没有剩余空间时，read 方法就会结束读取
+    //                 let n = self.stream.read(&mut self.buffer[self.cursor..]).await?;
 
-                    // 如果读取数据为空，需要通过缓冲区是否还有数据来判断是否正常关闭
-                    if 0 == n {
-                        if self.buffer.is_empty() {
-                            return Ok(None);
-                        } else {
-                            return Err("connection reset by peer".into());
-                        }
-                    }
+    //                 // 如果读取数据为空，需要通过缓冲区是否还有数据来判断是否正常关闭
+    //                 if 0 == n {
+    //                     if self.buffer.is_empty() {
+    //                         return Ok(None);
+    //                     } else {
+    //                         return Err("connection reset by peer".into());
+    //                     }
+    //                 }
 
-                    // 如果读取的数据不为空，则更新游标位置，继续下一轮循环
-                    self.cursor += n;
-                }
-            }
-        }
-    }
+    //                 // 如果读取的数据不为空，则更新游标位置，继续下一轮循环
+    //                 self.cursor += n;
+    //             }
+    //         }
+    //     }
+    // }
 
     {
         pub struct Connection {
             stream: net::TcpStream,
             buffer: BytesMut,
-            cursor: usize,
         }
         impl Connection {
             pub fn new(stream: net::TcpStream) -> Connection {
@@ -586,7 +659,6 @@ async fn main() -> Result<()> {
                     stream,
                     // 分配一个缓冲区，具有 4kb 的缓冲长度
                     buffer: BytesMut::with_capacity(1024 * 4),
-                    cursor: 0,
                 }
             }
 
@@ -603,12 +675,18 @@ async fn main() -> Result<()> {
                     // 使用 read 读取，将读取写入到写入器（缓冲区）中，并返回读取到的字节数
                     // 这里需要考虑避免覆盖之前读取的数据，在缓冲区满了后扩容缓冲区，增加缓冲区长度
                     // 通常缓冲区的写入和移除都是通过游标 (cursor) 来实现的。
+                    // 这里借助实现了 BufMut 特征的 BytesMut 实现自动管理游标
                     //
                     // 当返回的字节数为 0 时，代表着读到了数据流的末尾，说明了对端关闭了连接。
                     // 此时需要检查缓冲区是否还有数据，若没有数据，说明所有数据成功被处理，
                     // 若还有数据，说明对端在发送字节流的过程中断开了连接，导致只发送了部分数据，需要抛出错误
 
-                    if 0 = self.stream.read(&mut self.buffer).await? {}
+                    if 0 == self.stream.read(&mut self.buffer).await? {
+                        if self.buffer.is_empty() {
+                            return Ok(None);
+                        }
+                        return Err("connection reset by peer".into());
+                    }
                 }
             }
         }
