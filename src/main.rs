@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use bytes::{Buf, BytesMut};
 use mini_redis::{Frame, Result};
 use tokio::{
@@ -300,6 +302,8 @@ async fn main() -> Result<()> {
      * }
      * ```
      *
+     * ### 缓冲读取(Buffered Reads)
+     *
      * 组成帧的基本单元是字节，使用 TcpStream::read 读取字节流时会返回任意多的数据(填满传入的缓冲区 buffer)，
      * 这些数据对于帧结构来说是不确定的，它可能是帧的一部分、一个帧、多个帧。
      *
@@ -487,6 +491,65 @@ async fn main() -> Result<()> {
      * ```shell
      * curl 127.0.0.1:6330
      * ```
+     *
+     * ### 帧解析
+     * > 本次实现 mini-redis 只是为了熟悉基本的 rust 开发，如何实现帧结构以及帧解析可以参考 tokio 官方的 mini-redis。
+     * > 任何项目都是建立在需求上的，如果没有需求那程序开发也没有意义，这意味着如果要完整的实现 mini-redis，起码得熟悉 redis 的协议。
+     *
+     * 通过两个部分解析出一个帧：
+     * - 确保有一个完整的帧已经被写入了缓冲区，找到该帧的最后一个字节所在的位置
+     * - 解析帧
+     *
+     * ```rust
+     * use mini_redis::{Frame, Result};
+     * use mini_redis::frame::Error::Incomplete;
+     * use bytes::Buf;
+     * use std::io::Cursor;
+     *
+     * fn parse_frame(&mut self)
+     *     -> Result<Option<Frame>>
+     * {
+     *     // 创建 `T: Buf` 类型
+     *     let mut buf = Cursor::new(&self.buffer[..]);
+     *
+     *     // 检查是否读取了足够解析出一个帧的数据
+     *     match Frame::check(&mut buf) {
+     *         Ok(_) => {
+     *             // 获取组成该帧的字节数
+     *             let len = buf.position() as usize;
+     *
+     *             // 在解析开始之前，重置内部的游标位置
+     *             buf.set_position(0);
+     *
+     *             // 解析帧
+     *             let frame = Frame::parse(&mut buf)?;
+     *
+     *             // 解析完成，将缓冲区该帧的数据移除
+     *             self.buffer.advance(len);
+     *
+     *             // 返回解析出的帧
+     *             Ok(Some(frame))
+     *         }
+     *         // 缓冲区的数据不足以解析出一个完整的帧
+     *         Err(Incomplete) => Ok(None),
+     *         // 遇到一个错误
+     *         Err(e) => Err(e.into()),
+     *     }
+     * }
+     * ```
+     * 源码实现：https://github.com/tokio-rs/mini-redis/blob/tutorial/src/frame.rs
+     *
+     * ### 缓冲写入(Buffered writes)
+     * write_frame(frame) 函数会将一个完整的帧写入到 socket 中。 每一次写入都会触发一次或数次系统调用，当程序中有大量的连接和写入时，系统调用的开销将变得非常高昂。
+     * 
+     * > 相应的可以看看 SyllaDB 团队写过的一篇性能调优文章：https://www.scylladb.com/2022/01/12/async-rust-in-practice-performance-pitfalls-profiling/
+     * 
+     * 
+     * 
+     *
+     *
+     *
+     * // TODO
      */
 
     // {
@@ -687,6 +750,35 @@ async fn main() -> Result<()> {
                         }
                         return Err("connection reset by peer".into());
                     }
+                }
+            }
+
+            fn parse_frame(&mut self) -> Result<Option<Frame>> {
+                // 创建 `T: Buf` 类型
+                let mut buf = Cursor::new(&self.buffer[..]);
+
+                // 检查是否读取了足够解析出一个帧的数据
+                match Frame::check(&mut buf) {
+                    Ok(_) => {
+                        // 获取组成该帧的字节数
+                        let len = buf.position() as usize;
+
+                        // 在解析开始之前，重置内部的游标位置
+                        buf.set_position(0);
+
+                        // 解析帧
+                        let frame = Frame::parse(&mut buf)?;
+
+                        // 解析完成，将缓冲区该帧的数据移除
+                        self.buffer.advance(len);
+
+                        // 返回解析出的帧
+                        Ok(Some(frame))
+                    }
+                    // 缓冲区的数据不足以解析出一个完整的帧
+                    Err(mini_redis::frame::Error::Incomplete) => Ok(None),
+                    // 遇到一个错误
+                    Err(e) => Err(e.into()),
                 }
             }
         }
