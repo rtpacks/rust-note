@@ -3,7 +3,7 @@ use std::io::Cursor;
 use bytes::{Buf, BytesMut};
 use mini_redis::{Frame, Result};
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
+    io::{self, AsyncReadExt, AsyncWriteExt, BufWriter},
     net::{self, TcpListener},
 };
 
@@ -541,15 +541,94 @@ async fn main() -> Result<()> {
      *
      * ### 缓冲写入(Buffered writes)
      * write_frame(frame) 函数会将一个完整的帧写入到 socket 中。 每一次写入都会触发一次或数次系统调用，当程序中有大量的连接和写入时，系统调用的开销将变得非常高昂。
-     * 
+     *
      * > 相应的可以看看 SyllaDB 团队写过的一篇性能调优文章：https://www.scylladb.com/2022/01/12/async-rust-in-practice-performance-pitfalls-profiling/
+     *
+     * 为了降低系统调用的次数，需要使用一个写入缓冲区，当写入一个帧时，首先会写入该缓冲区，然后等缓冲区数据足够多时，再集中将其中的数据写入到 socket 中，这样就将多次系统调用优化减少到一次。
+     *
+     * 但是使用缓冲区也不总是能提升性能的。 例如，向缓冲区写入 bulk 帧 (多个帧放在一起组成一个 bulk 帧)。
+     * bulk 帧的特点是：由多个帧组合而成，帧体数据可能会很大，当数据较大时，先写入缓冲区再写入 socket 会有较大的性能开销。
+     * 事实上 bulk 帧已经是批量了，相比单帧多次调用本就可以提升效率，不需要使用缓冲区了。
+     *
+     * > 缓冲区是为了避免小数据的频繁读写导致系统调用开销过高设计的，当数据量够大就不再需要缓冲区。
+     *
+     * 为了便于实现缓冲写，可以使用 BufWriter 结构体。该结构体实现了 AsyncWrite 特征，当 write 方法被调用时，不会直接写入到 socket 中，而是先写入到缓冲区中。
+     * 当缓冲区被填满时，其中的内容会自动刷到(写入到)内部的 socket，然后再将缓冲区清空。当然，其中还存在某些优化，通过这些优化可以绕过缓冲区直接访问 socket。
+     *
+     * > 与 Frame 实现一样，这里不会实现完整的 write_frame 函数，完整代码：https://github.com/tokio-rs/mini-redis/blob/tutorial/src/connection.rs#L159-L184
+     *
+     * 通过 BufWrite 可以实现缓冲区写，避免了小数据的频繁读写导致系统调用开销过高的问题，由直接写入 stream 改为 BufWriter 包裹的 `BufWriter<TcpStream>`
+     *
+     * ```rust
+     * use tokio::io::BufWriter;
+     * use tokio::net::TcpStream;
+     * use bytes::BytesMut;
+     *
+     * pub struct Connection {
+     *     stream: BufWriter<TcpStream>,
+     *     buffer: BytesMut,
+     * }
+     *
+     * impl Connection {
+     *     pub fn new(stream: TcpStream) -> Connection {
+     *         Connection {
+     *             stream: BufWriter::new(stream),
+     *             buffer: BytesMut::with_capacity(4096),
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * 简单的 write_frame 实现，由于 redis 的相关协议并不熟悉，这里主要关注 Buffer 的用法即可：
+     * ```rust
+     * use tokio::io::{self, AsyncWriteExt};
+     * use mini_redis::Frame;
+     *
+     * async fn write_frame(&mut self, frame: &Frame)
+     *     -> io::Result<()>
+     * {
+     *     match frame {
+     *         Frame::Simple(val) => {
+     *             self.stream.write_u8(b'+').await?;
+     *             self.stream.write_all(val.as_bytes()).await?;
+     *             self.stream.write_all(b"\r\n").await?;
+     *         }
+     *         Frame::Error(val) => {
+     *             self.stream.write_u8(b'-').await?;
+     *             self.stream.write_all(val.as_bytes()).await?;
+     *             self.stream.write_all(b"\r\n").await?;
+     *         }
+     *         Frame::Integer(val) => {
+     *             self.stream.write_u8(b':').await?;
+     *             self.write_decimal(*val).await?;
+     *         }
+     *         Frame::Null => {
+     *             self.stream.write_all(b"$-1\r\n").await?;
+     *         }
+     *         Frame::Bulk(val) => {
+     *             let len = val.len();
+     *
+     *             self.stream.write_u8(b'$').await?;
+     *             self.write_decimal(len as u64).await?;
+     *             self.stream.write_all(val).await?;
+     *             self.stream.write_all(b"\r\n").await?;
+     *         }
+     *         Frame::Array(_val) => unimplemented!(),
+     *     }
+     *
+     *     self.stream.flush().await;
+     *
+     *     Ok(())
+     * }
+     * ```
+     *
+     * 这里使用的方法由 AsyncWriteExt 提供，它们在 TcpStream 中也有对应的函数。但是在没有缓冲区的情况下最好避免使用这种逐字节的写入方式！不然，每写入几个字节就会触发一次系统调用，写完整个数据帧可能需要几十次系统调用，开销巨大。
+     *
+     * 在函数结束前，额外的调用了一次 self.stream.flush().await，flush 的调用会将缓冲区中剩余的数据立刻写入到 socket 中。这样做的原因是缓冲区可能还存在数据，需要手动将剩余的数据刷到 socket 中。
+     *
+     * > 当帧比较小的时，每写一次帧就 flush 一次的模式性能开销会比较大，此时可以选择在 Connection 中实现 flush 函数，然后将等帧积累多个后，再一次性在 Connection 中进行 flush。
      * 
      * 
-     * 
-     *
-     *
-     *
-     * // TODO
      */
 
     // {
@@ -711,13 +790,86 @@ async fn main() -> Result<()> {
     //     }
     // }
 
+    // {
+    //     pub struct Connection {
+    //         stream: net::TcpStream,
+    //         buffer: BytesMut,
+    //     }
+    //     impl Connection {
+    //         pub fn new(stream: net::TcpStream) -> Connection {
+    //             Connection {
+    //                 stream,
+    //                 // 分配一个缓冲区，具有 4kb 的缓冲长度
+    //                 buffer: BytesMut::with_capacity(1024 * 4),
+    //             }
+    //         }
+
+    //         pub async fn read_frame(&mut self) -> mini_redis::Result<Option<Frame>> {
+    //             loop {
+    //                 // 第一步：
+    //                 // 尝试从缓冲区的数据中解析出一个数据帧，只有当数据足够被解析时，才会返回对应的帧数据，否则返回 None
+    //                 if let Some(frame) = self.parse_frame()? {
+    //                     return Ok(Some(frame));
+    //                 }
+
+    //                 // 第二步：
+    //                 // 如果缓冲区中的数据还不足以被解析为一个数据帧，需要从 socket 中读取更多的数据
+    //                 // 使用 read 读取，将读取写入到写入器（缓冲区）中，并返回读取到的字节数
+    //                 // 这里需要考虑避免覆盖之前读取的数据，在缓冲区满了后扩容缓冲区，增加缓冲区长度
+    //                 // 通常缓冲区的写入和移除都是通过游标 (cursor) 来实现的。
+    //                 // 这里借助实现了 BufMut 特征的 BytesMut 实现自动管理游标
+    //                 //
+    //                 // 当返回的字节数为 0 时，代表着读到了数据流的末尾，说明了对端关闭了连接。
+    //                 // 此时需要检查缓冲区是否还有数据，若没有数据，说明所有数据成功被处理，
+    //                 // 若还有数据，说明对端在发送字节流的过程中断开了连接，导致只发送了部分数据，需要抛出错误
+
+    //                 if 0 == self.stream.read(&mut self.buffer).await? {
+    //                     if self.buffer.is_empty() {
+    //                         return Ok(None);
+    //                     }
+    //                     return Err("connection reset by peer".into());
+    //                 }
+    //             }
+    //         }
+
+    //         fn parse_frame(&mut self) -> Result<Option<Frame>> {
+    //             // 创建 `T: Buf` 类型
+    //             let mut buf = Cursor::new(&self.buffer[..]);
+
+    //             // 检查是否读取了足够解析出一个帧的数据
+    //             match Frame::check(&mut buf) {
+    //                 Ok(_) => {
+    //                     // 获取组成该帧的字节数
+    //                     let len = buf.position() as usize;
+
+    //                     // 在解析开始之前，重置内部的游标位置
+    //                     buf.set_position(0);
+
+    //                     // 解析帧
+    //                     let frame = Frame::parse(&mut buf)?;
+
+    //                     // 解析完成，将缓冲区该帧的数据移除
+    //                     self.buffer.advance(len);
+
+    //                     // 返回解析出的帧
+    //                     Ok(Some(frame))
+    //                 }
+    //                 // 缓冲区的数据不足以解析出一个完整的帧
+    //                 Err(mini_redis::frame::Error::Incomplete) => Ok(None),
+    //                 // 遇到一个错误
+    //                 Err(e) => Err(e.into()),
+    //             }
+    //         }
+    //     }
+    // }
+
     {
         pub struct Connection {
-            stream: net::TcpStream,
+            stream: BufWriter<net::TcpStream>,
             buffer: BytesMut,
         }
         impl Connection {
-            pub fn new(stream: net::TcpStream) -> Connection {
+            pub fn new(stream: BufWriter<net::TcpStream>) -> Connection {
                 Connection {
                     stream,
                     // 分配一个缓冲区，具有 4kb 的缓冲长度
