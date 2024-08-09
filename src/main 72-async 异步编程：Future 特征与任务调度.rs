@@ -208,7 +208,7 @@ fn main() {
      * 2. Future 执行异步任务（新线程休眠）
      * 3. Future 执行完异步任务（线程休眠）后让执行器再次 poll 当前 Future
      *
-     * 创建 Future 和 Future 执行异步任务
+     * 第 1 和第 2 步骤：创建 Future 和 Future 执行异步任务
      * ```rust
      * // 实现 Future 运行异步任务的逻辑
      * impl TimeFuture {
@@ -231,7 +231,7 @@ fn main() {
      * ```
      *
      *
-     * 第三步，异步任务结束后需要调用 wake 让当前 Future 被再次 poll 执行，wake 应该来自哪？在什么时候、以及怎么注册 wake？
+     * 第 3 步骤，异步任务结束后需要调用 wake 让当前 Future 被再次 poll 执行，wake 应该来自哪？在什么时候、以及怎么注册 wake？
      * 其实很简单，在 Future 特征定义中，poll 函数 `fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;` 的 `cx: &mut Context<'_>` 就是注册、和外部调用的 wake 的来源。
      *
      * wake 注册就是将 wake 传递给外部，用 wake 关联当前 Future 的过程，而让外部调用 wake 函数就是在让执行器再次 poll wake 关联的 Future 的过程。
@@ -239,7 +239,7 @@ fn main() {
      *
      * > 每个 Future 在注册其 wake 函数时，将自身的信息存储在 Waker 中。**当 wake 被调用时 Future 的自身信息会被传递给执行器**，从而使执行器能够正确识别并调度特定的 Future。
      *
-     * 因此，第三步骤其实是当前 Future 被 poll 执行时将 wake 存储起来，然后外部在异步任务结束后，调用 wake 函数让执行器正确识别 Future 并再次 poll 当前 Future 的过程。
+     * 因此，第 3 步骤其实是当前 Future 被 poll 执行时将 wake 存储起来，然后外部在异步任务结束后，调用 wake 函数让执行器正确识别 Future 并再次 poll 当前 Future 的过程。
      *
      * **注意：这里的外部是指当前线程外。**
      *
